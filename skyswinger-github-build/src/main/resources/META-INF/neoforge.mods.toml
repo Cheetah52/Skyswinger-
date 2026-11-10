@@ -1,0 +1,24 @@
+modLoader="javafml"
+loaderVersion="[1,)"
+license="MIT"
+
+[[mods]]
+modId="skyswinger"
+version="1.0.0"
+displayName="Sky Swinger"
+authors="You"
+description='''Swing through the sky on webs. No buildings needed.'''
+
+[[dependencies.skyswinger]]
+modId="neoforge"
+type="required"
+versionRange="[21.1,)"
+ordering="NONE"
+side="BOTH"
+
+[[dependencies.skyswinger]]
+modId="minecraft"
+type="required"
+versionRange="[1.21.1]"
+ordering="NONE"
+side="BOTH"
