@@ -12,6 +12,8 @@ jobs:
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: 8.10.2
+      - name: Apply update files
+        run: cp -r skyswinger-update-visuals/skyswinger-github-build/. skyswinger-github-build/
       - name: Build
         working-directory: skyswinger-github-build
         run: gradle build
