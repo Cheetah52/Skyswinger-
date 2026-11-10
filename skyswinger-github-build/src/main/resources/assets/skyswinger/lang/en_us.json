@@ -1,4 +1,6 @@
 {
-  "key.skyswinger.swing": "Shoot Web / Swing",
+  "key.skyswinger.swing": "Shoot Web / Swing (hold)",
+  "key.skyswinger.zip": "Web Zip",
+  "key.skyswinger.shoot": "Web Shot (pin target)",
   "key.categories.skyswinger": "Sky Swinger"
 }
