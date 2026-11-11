@@ -2,7 +2,8 @@ package com.skyswinger;
 
 /** "N uses, then a cooldown." Plain Java so both client and server can use it. */
 public final class Burst {
-    private final int max, cooldown, minGap;
+    private int max, cooldown;
+    private final int minGap;
     private int used;
     private long lastUse = Long.MIN_VALUE / 2;
     private long lockUntil;
@@ -11,6 +12,16 @@ public final class Burst {
         this.max = max;
         this.cooldown = cooldownTicks;
         this.minGap = minGapTicks;
+    }
+
+    /** Update the limits (used when settings change). */
+    public void configure(int max, int cooldownTicks) {
+        this.max = Math.max(1, max);
+        this.cooldown = Math.max(0, cooldownTicks);
+    }
+
+    public int max() {
+        return max;
     }
 
     public boolean tryUse(long now) {
@@ -36,9 +47,14 @@ public final class Burst {
         return Math.max(0, max - used);
     }
 
+    /** Ticks left on the cooldown (0 if not cooling down). */
+    public long lockRemaining(long now) {
+        return Math.max(0, lockUntil - now);
+    }
+
     /** 0..1 while locked: how far along the cooldown is. */
     public float lockProgress(long now) {
-        if (now >= lockUntil) return 1.0f;
+        if (now >= lockUntil || cooldown <= 0) return 1.0f;
         return 1.0f - (lockUntil - now) / (float) cooldown;
     }
 }

@@ -3,7 +3,6 @@ package com.skyswinger;
 import com.mojang.blaze3d.vertex.PoseStack;
 import com.mojang.blaze3d.vertex.VertexConsumer;
 import net.minecraft.client.Minecraft;
-import net.minecraft.client.gui.GuiGraphics;
 import net.minecraft.client.renderer.MultiBufferSource;
 import net.minecraft.client.renderer.RenderType;
 import net.minecraft.core.particles.ParticleTypes;
@@ -24,64 +23,51 @@ import net.neoforged.api.distmarker.Dist;
 import net.neoforged.bus.api.SubscribeEvent;
 import net.neoforged.fml.common.EventBusSubscriber;
 import net.neoforged.neoforge.client.event.ComputeFovModifierEvent;
-import net.neoforged.neoforge.client.event.RenderGuiEvent;
 import net.neoforged.neoforge.client.event.RenderLevelStageEvent;
 import net.neoforged.neoforge.event.tick.PlayerTickEvent;
 import net.neoforged.neoforge.network.PacketDistributor;
 
 /**
- * R (hold)  swing on a web that attaches ANCHOR_HEIGHT_ABOVE blocks above you (one web per press)
+ * R (hold)  swing on a web that attaches above you (one web per press)
  * W/A/S/D   pump the swing (only near the bottom, only along your swing, can't loop over the top)
  * Shift     reel in      Space let out
- * Z         web zip (2 uses, then 3 second cooldown)
- * V         web shot: cobweb + tiny damage (10 shots, then 3 second cooldown)
+ * Z         web zip
+ * V         web shot: cobweb + tiny damage
+ *
+ * Most tuning values are now in the in-game settings: Mods -> Sky Swinger -> Config (see Config.java).
  */
 @EventBusSubscriber(modid = SkySwinger.MODID, value = Dist.CLIENT)
 public final class SwingClient {
-    // ---- tweak these ----
-    private static final boolean USE_BLOCKS_IF_AIMED_AT = false;
+    // ---- fixed values ----
     private static final double BLOCK_RANGE = 80.0;
     private static final double SKY_FORWARD = 22.0;
-    private static final double ANCHOR_HEIGHT_ABOVE = 40.0; // the web always attaches this many blocks above you
     private static final double MIN_ROPE = 4.0, MAX_ROPE = 100.0;
-    private static final double MAX_SPEED = 4.5;
-
-    // momentum
-    private static final double SWING_KEEP = 0.995;      // speed kept each tick while swinging (1.0 = never slows down)
-    private static final double RELEASE_BOOST = 1.15;    // extra speed when you let go
-    private static final int GLIDE_TICKS = 40;           // how long momentum carries after letting go (40 = 2 seconds)
-    private static final double GLIDE_KEEP = 0.985;      // speed kept each tick at the start of the glide (vanilla is 0.91)
-
-    // realistic pumping (W/A/S/D)
-    private static final double PUMP = 0.04;             // how hard pumping pushes
     private static final double PUMP_ZONE = 0.82;        // pumping only works near the bottom (within about 35 degrees)
     private static final double PUMP_HEIGHT_LIMIT = 2.0; // pumping stops once your swing would reach this close to the anchor's height
-    private static final double BRAKE = 0.5;             // pressing against your swing slows it (fraction of PUMP)
-
-    private static final double ZIP_RANGE = 60.0, ZIP_AIR_DISTANCE = 30.0, ZIP_SPEED = 1.8;
+    private static final double BRAKE = 0.5;             // pressing against your swing slows it (fraction of pump)
+    private static final double ZIP_RANGE = 60.0, ZIP_AIR_DISTANCE = 30.0;
     private static final int ZIP_MAX_TICKS = 30;
-    private static final int ZIP_MAX_USES = 2;          // zips before the cooldown
-    private static final int ZIP_COOLDOWN_TICKS = 60;   // 3 seconds
     private static final double SHOT_RANGE = 40.0;
-    private static final float SOUND_VOLUME = 1.0f;     // master volume for the sound effects (0 = silent)
-    // ---------------------
+    private static final int LOOSE_WEB_TICKS = 20;       // how long a let-go web takes to fade (1 second)
 
     // vanilla physics values (don't change)
     private static final double GRAVITY = 0.08;
     private static final double AIR_DRAG_XZ = 0.91, AIR_DRAG_Y = 0.98;
 
-    private static final Burst WEB_BURST =
-            new Burst(WebShotServer.MAX_SHOTS, WebShotServer.COOLDOWN_TICKS, WebShotServer.MIN_GAP);
-    private static final Burst ZIP_BURST = new Burst(ZIP_MAX_USES, ZIP_COOLDOWN_TICKS, 4);
+    static final Burst WEB_BURST = new Burst(10, 60, WebShotServer.MIN_GAP);
+    static final Burst ZIP_BURST = new Burst(2, 60, 4);
 
-    private static final SoundEvent SFX_ATTACH = sfx("entity.fishing_bobber.throw");
+    private static final SoundEvent SFX_THWIP = sfx("entity.fishing_bobber.throw");
+    private static final SoundEvent SFX_SPIT = sfx("entity.llama.spit");
+    private static final SoundEvent SFX_STICK = sfx("entity.slime.squish_small");
     private static final SoundEvent SFX_ZIP = sfx("entity.fishing_bobber.retrieve");
     private static final SoundEvent SFX_SHOT = sfx("entity.arrow.shoot");
 
     private static Vec3 anchor;
     private static double ropeLength;
     private static long attachTime, zipStart, shotStart;
-    private static int glideTicks;
+    private static boolean anchorLanded;
+    private static int glideTicks, glideTotal;
 
     private static Vec3 zipTarget;
     private static int zipTicks;
@@ -89,9 +75,22 @@ public final class SwingClient {
     private static Vec3 shotEnd;
     private static long shotUntil;
 
+    // a web you let go of: hangs from where it was stuck, goes slack and fades
+    private static Vec3 looseFrom, looseTo, looseVel;
+    private static long looseTime;
+    private static int looseR, looseG, looseB;
+
+    private static WhooshSound whoosh;
     private static int curAlpha = 255;
 
     private record Aim(Vec3 point, boolean hit) {}
+
+    // ======== used by the HUD, sounds and animations ========
+    public static boolean isSwinging() { return anchor != null; }
+    public static boolean isZipping() { return zipTarget != null; }
+    public static boolean isMoving() { return anchor != null || zipTarget != null || glideTicks > 0; }
+    public static Vec3 anchor() { return anchor; }
+    public static Vec3 zipTarget() { return zipTarget; }
 
     // ======== helpers ========
     private static SoundEvent sfx(String id) {
@@ -100,7 +99,14 @@ public final class SwingClient {
 
     private static void playSfx(Player p, SoundEvent e, float vol, float pitch) {
         p.level().playLocalSound(p.getX(), p.getY(), p.getZ(), e, SoundSource.PLAYERS,
-                vol * SOUND_VOLUME, pitch, false);
+                vol * Config.SOUND_VOLUME.get().floatValue(), pitch, false);
+    }
+
+    private static void startWhoosh(Player p) {
+        if (!Config.WHOOSH.get()) return;
+        if (whoosh != null && !whoosh.isStopped()) return;
+        whoosh = new WhooshSound(p);
+        Minecraft.getInstance().getSoundManager().play(whoosh);
     }
 
     private static void trail(Player p) {
@@ -113,6 +119,12 @@ public final class SwingClient {
         return p.position().add(0, p.getBbHeight() * 0.5, 0);
     }
 
+    /** Keep the cooldowns in line with the settings. */
+    private static void syncBursts() {
+        WEB_BURST.configure(WebShotServer.maxShots(), WebShotServer.cooldownTicks());
+        ZIP_BURST.configure(Config.ZIP_USES.get(), Config.ticks(Config.ZIP_COOLDOWN));
+    }
+
     // ======== tick ========
     @SubscribeEvent
     public static void onPlayerTick(PlayerTickEvent.Pre event) {
@@ -120,6 +132,7 @@ public final class SwingClient {
         Minecraft mc = Minecraft.getInstance();
         if (player != mc.player) return;
 
+        syncBursts();
         boolean usable = mc.screen == null && player.isAlive()
                 && !player.isSpectator() && !player.isPassenger();
 
@@ -137,8 +150,15 @@ public final class SwingClient {
         } else if (!wants && anchor != null) {
             release(player);
         }
-        if (anchor != null) swing(player, mc);
-        else glide(player);
+        if (anchor != null) {
+            if (!anchorLanded && player.level().getGameTime() - attachTime >= 3) {
+                anchorLanded = true;
+                playSfx(player, SFX_STICK, 0.35f, 1.6f); // web sticks
+            }
+            swing(player, mc);
+        } else {
+            glide(player);
+        }
     }
 
     // ======== aiming ========
@@ -165,6 +185,7 @@ public final class SwingClient {
         shotStart = now;
         shotUntil = now + 10;
         playSfx(p, SFX_SHOT, 0.2f, 1.9f);
+        playSfx(p, SFX_SPIT, 0.12f, 1.8f);
         PacketDistributor.sendToServer(new WebShotPayload());
     }
 
@@ -178,7 +199,9 @@ public final class SwingClient {
         zipTarget = a.hit() ? a.point() : p.getEyePosition().add(p.getLookAngle().scale(ZIP_AIR_DISTANCE));
         zipTicks = 0;
         zipStart = now;
+        playSfx(p, SFX_THWIP, 0.3f, 2.0f);
         playSfx(p, SFX_ZIP, 0.3f, 1.3f);
+        startWhoosh(p);
         PacketDistributor.sendToServer(new SwingPayload(true)); // fall-damage protection
     }
 
@@ -189,12 +212,13 @@ public final class SwingClient {
             endZip(p);
             return;
         }
-        p.setDeltaMovement(to.scale(1.0 / d).scale(ZIP_SPEED));
+        p.setDeltaMovement(to.scale(1.0 / d).scale(Config.ZIP_SPEED.get()));
         p.fallDistance = 0;
         trail(p);
     }
 
     private static void endZip(Player p) {
+        letGo(p, zipTarget, 150, 225, 255);
         zipTarget = null;
         p.setDeltaMovement(p.getDeltaMovement().scale(0.8));
         PacketDistributor.sendToServer(new SwingPayload(false));
@@ -206,7 +230,7 @@ public final class SwingClient {
         Vec3 look = p.getLookAngle();
         Vec3 target = null;
 
-        if (USE_BLOCKS_IF_AIMED_AT) {
+        if (Config.USE_BLOCKS.get()) {
             BlockHitResult hit = p.level().clip(new ClipContext(eye, eye.add(look.scale(BLOCK_RANGE)),
                     ClipContext.Block.COLLIDER, ClipContext.Fluid.NONE, p));
             if (hit.getType() == HitResult.Type.BLOCK && hit.getLocation().y > eye.y + 2.0) {
@@ -216,33 +240,51 @@ public final class SwingClient {
         if (target == null) {
             Vec3 flat = new Vec3(look.x, 0, look.z);
             flat = flat.lengthSqr() < 1.0E-4 ? Vec3.directionFromRotation(0, p.getYRot()) : flat.normalize();
-            target = eye.add(flat.scale(SKY_FORWARD)).add(0, ANCHOR_HEIGHT_ABOVE, 0);
+            target = eye.add(flat.scale(SKY_FORWARD)).add(0, Config.ANCHOR_HEIGHT.get(), 0);
         }
 
         anchor = target;
+        anchorLanded = false;
         glideTicks = 0;
         ropeLength = Mth.clamp(center(p).distanceTo(anchor), MIN_ROPE, MAX_ROPE);
         attachTime = p.level().getGameTime();
-        playSfx(p, SFX_ATTACH, 0.25f, 1.7f);
+        // "thwip"
+        playSfx(p, SFX_THWIP, 0.3f, 1.9f);
+        playSfx(p, SFX_SPIT, 0.15f, 1.7f);
+        startWhoosh(p);
         PacketDistributor.sendToServer(new SwingPayload(true));
     }
 
     private static void release(Player p) {
+        letGo(p, anchor, 250, 250, 255);
         anchor = null;
-        glideTicks = GLIDE_TICKS;
-        p.setDeltaMovement(p.getDeltaMovement().scale(RELEASE_BOOST));
+        glideTotal = Config.ticks(Config.GLIDE_SECONDS);
+        glideTicks = glideTotal;
+        p.setDeltaMovement(p.getDeltaMovement().scale(Config.RELEASE_BOOST.get()));
         PacketDistributor.sendToServer(new SwingPayload(false));
+    }
+
+    /** Leave the web behind so it can go slack and fade instead of vanishing. */
+    private static void letGo(Player p, Vec3 stuckAt, int r, int g, int b) {
+        if (stuckAt == null || !Config.WEB_FADE.get()) return;
+        looseFrom = stuckAt;
+        looseTo = hand(p, 1.0f);
+        looseVel = p.getDeltaMovement().scale(0.3);
+        looseTime = p.level().getGameTime();
+        looseR = r;
+        looseG = g;
+        looseB = b;
     }
 
     /** After letting go, cancel most of vanilla's air drag for a moment so your speed carries. */
     private static void glide(Player p) {
-        if (glideTicks <= 0) return;
+        if (glideTicks <= 0 || glideTotal <= 0) return;
         if (p.onGround() || p.isInWater() || p.isInLava() || p.isFallFlying() || p.getAbilities().flying) {
             glideTicks = 0;
             return;
         }
-        double fade = glideTicks / (double) GLIDE_TICKS;          // 1 right after release, 0 at the end
-        double keep = Mth.lerp(fade, AIR_DRAG_XZ, GLIDE_KEEP);    // eases back to normal air drag
+        double fade = glideTicks / (double) glideTotal;                          // 1 right after release, 0 at the end
+        double keep = Mth.lerp(fade, AIR_DRAG_XZ, Config.GLIDE_KEEP.get());      // eases back to normal air drag
         double comp = keep / AIR_DRAG_XZ;
         Vec3 v = p.getDeltaMovement();
         p.setDeltaMovement(v.x * comp, v.y, v.z * comp);
@@ -271,14 +313,16 @@ public final class SwingClient {
 
         if (!p.onGround()) {
             // cancel most of vanilla's air drag so the swing keeps its speed (gravity still applies)
-            v = new Vec3(v.x * SWING_KEEP / AIR_DRAG_XZ,
-                         v.y * SWING_KEEP / AIR_DRAG_Y,
-                         v.z * SWING_KEEP / AIR_DRAG_XZ);
+            double keep = Config.SWING_KEEP.get();
+            v = new Vec3(v.x * keep / AIR_DRAG_XZ,
+                         v.y * keep / AIR_DRAG_Y,
+                         v.z * keep / AIR_DRAG_XZ);
             v = pump(p, mc, v, dir);
         }
 
+        double max = Config.MAX_SPEED.get();
         double speed = v.length();
-        if (speed > MAX_SPEED) v = v.scale(MAX_SPEED / speed);
+        if (speed > max) v = v.scale(max / speed);
 
         p.setDeltaMovement(v);
         p.fallDistance = 0;
@@ -297,6 +341,7 @@ public final class SwingClient {
         if (f == 0 && s == 0) return v;
         if (dir.y < PUMP_ZONE) return v; // too far up the arc to pump
 
+        double pumpStrength = Config.PUMP.get();
         double yaw = Math.toRadians(p.getYRot());
         double fx = -Math.sin(yaw), fz = Math.cos(yaw);
         double lx = Math.cos(yaw), lz = Math.sin(yaw);
@@ -311,15 +356,15 @@ public final class SwingClient {
                 double height = center(p).y - anchor.y;
                 double reach = height + v.lengthSqr() / (2.0 * GRAVITY);
                 if (reach > -PUMP_HEIGHT_LIMIT) return v; // already as big as a real swing gets
-                return v.add(t.scale(along * PUMP));
+                return v.add(t.scale(along * pumpStrength));
             }
-            return v.add(t.scale(along * PUMP * BRAKE)); // pushing against the swing slows it
+            return v.add(t.scale(along * pumpStrength * BRAKE)); // pushing against the swing slows it
         }
 
         // hanging still: start a swing in the direction you press
         Vec3 start = input.subtract(dir.scale(input.dot(dir)));
         if (start.lengthSqr() < 1.0E-6) return v;
-        return v.add(start.normalize().scale(PUMP));
+        return v.add(start.normalize().scale(pumpStrength));
     }
 
     // ======== wider FOV with speed ========
@@ -327,42 +372,9 @@ public final class SwingClient {
     public static void onFov(ComputeFovModifierEvent event) {
         if (event.getPlayer() != Minecraft.getInstance().player) return;
         if (anchor == null && zipTarget == null) return;
+        if (!Config.SPEED_FOV.get()) return;
         float extra = (float) Math.min(0.35, event.getPlayer().getDeltaMovement().length() * 0.12);
         event.setNewFovModifier(event.getNewFovModifier() * (1.0f + extra));
-    }
-
-    // ======== HUD: web + zip charges ========
-    @SubscribeEvent
-    public static void onHud(RenderGuiEvent.Post event) {
-        Minecraft mc = Minecraft.getInstance();
-        Player p = mc.player;
-        if (p == null || mc.options.hideGui) return;
-        long now = p.level().getGameTime();
-
-        boolean active = anchor != null || zipTarget != null;
-        boolean webNotFull = WEB_BURST.isLocked(now) || WEB_BURST.remaining(now) < WebShotServer.MAX_SHOTS;
-        boolean zipNotFull = ZIP_BURST.isLocked(now) || ZIP_BURST.remaining(now) < ZIP_MAX_USES;
-        if (!active && !webNotFull && !zipNotFull) return;
-
-        GuiGraphics g = event.getGuiGraphics();
-        int x = g.guiWidth() - 122;
-        int y = g.guiHeight() - 40;
-        drawPips(g, mc, x, y, "WEB", WEB_BURST, WebShotServer.MAX_SHOTS, now);
-        drawPips(g, mc, x, y + 12, "ZIP", ZIP_BURST, ZIP_MAX_USES, now);
-    }
-
-    private static void drawPips(GuiGraphics g, Minecraft mc, int x, int y, String label,
-                                 Burst burst, int max, long now) {
-        g.drawString(mc.font, label, x, y, 0xFFFFFFFF);
-        boolean locked = burst.isLocked(now);
-        int lit = locked ? (int) (burst.lockProgress(now) * max) : burst.remaining(now);
-        int color = locked ? 0xFFFF7070 : 0xFFE6F4FF;   // red while recharging
-        int pipW = max > 5 ? 7 : 16;
-        int px = x + 24;
-        for (int i = 0; i < max; i++) {
-            int x1 = px + i * (pipW + 1);
-            g.fill(x1, y + 1, x1 + pipW, y + 7, i < lit ? color : 0x66000000);
-        }
     }
 
     // ======== draw webs ========
@@ -419,6 +431,20 @@ public final class SwingClient {
         }
     }
 
+    /** A loose web drooping between two points (a curve that sags in the middle). */
+    private static void slackWeb(PoseStack.Pose pose, VertexConsumer vc, Vec3 a, Vec3 b, double sag,
+                                 int r, int g, int bl) {
+        int n = 24;
+        Vec3 ctrl = a.add(b).scale(0.5).add(0, -2.0 * sag, 0);
+        Vec3 prev = a;
+        for (int i = 1; i <= n; i++) {
+            double t = i / (double) n, u = 1.0 - t;
+            Vec3 pt = a.scale(u * u).add(ctrl.scale(2.0 * u * t)).add(b.scale(t * t));
+            seg(pose, vc, prev, pt, r, g, bl);
+            prev = pt;
+        }
+    }
+
     /** A little spider-web (spokes + rings) where a web lands. */
     private static void splat(PoseStack.Pose pose, VertexConsumer vc, Vec3 c, Vec3 dir, double radius,
                               int r, int g, int bl) {
@@ -449,7 +475,9 @@ public final class SwingClient {
         if (p == null) return;
         long now = p.level().getGameTime();
         boolean shot = shotEnd != null && now <= shotUntil;
-        if (anchor == null && zipTarget == null && !shot) return;
+        boolean loose = looseFrom != null && now - looseTime < LOOSE_WEB_TICKS;
+        if (!loose) looseFrom = null;
+        if (anchor == null && zipTarget == null && !shot && !loose) return;
 
         float pt = event.getPartialTick().getGameTimeDeltaPartialTick(true);
         float time = now + pt;
@@ -485,6 +513,18 @@ public final class SwingClient {
                 double rad = 0.6 * Math.min(1.0f, (age - 3.0f) / 3.0f);
                 splat(pose, vc, shotEnd, shotEnd.subtract(start).normalize(), rad, 255, 255, 255);
             }
+            curAlpha = 255;
+        }
+        if (loose) {
+            float age = now - looseTime + pt;
+            float life = 1.0f - age / LOOSE_WEB_TICKS;
+            curAlpha = (int) Mth.clamp(255.0f * life, 0.0f, 255.0f);
+            // the free end drifts a little and falls
+            Vec3 end = looseTo.add(looseVel.scale(Math.min(age, 8.0f))).add(0, -0.03 * age * age, 0);
+            double sag = Math.min(8.0, age * 0.4);
+            slackWeb(pose, vc, looseFrom, end, sag, looseR, looseG, looseB);
+            Vec3 d = looseFrom.subtract(end);
+            if (d.lengthSqr() > 1.0E-4) splat(pose, vc, looseFrom, d.normalize(), 1.3 * life, looseR, looseG, looseB);
             curAlpha = 255;
         }
 

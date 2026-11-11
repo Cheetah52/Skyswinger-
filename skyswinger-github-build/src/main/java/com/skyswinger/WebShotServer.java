@@ -23,21 +23,29 @@ import net.minecraft.world.phys.Vec3;
 
 /** Server side of the Web Shot: a cobweb at the target plus a tiny bit of damage. */
 public final class WebShotServer {
-    public static final int MAX_SHOTS = 10;        // shots before the cooldown
-    public static final int COOLDOWN_TICKS = 60;   // 3 seconds
     public static final int MIN_GAP = 3;           // ticks between shots
 
     private static final double RANGE = 40.0;
-    private static final float DAMAGE = 1.0f;      // very little (half a heart)
 
     private static final SoundEvent HIT_SOUND =
             SoundEvent.createVariableRangeEvent(ResourceLocation.withDefaultNamespace("block.cobweb.hit"));
     private static final Map<UUID, Burst> BURSTS = new ConcurrentHashMap<>();
 
+    /** Shots before the cooldown (from the settings). */
+    public static int maxShots() {
+        return Config.SHOTS.get();
+    }
+
+    /** Cooldown length in ticks (from the settings). */
+    public static int cooldownTicks() {
+        return Config.ticks(Config.SHOT_COOLDOWN);
+    }
+
     public static void fire(Player player) {
         if (!(player.level() instanceof ServerLevel level)) return;
         long now = level.getGameTime();
-        Burst burst = BURSTS.computeIfAbsent(player.getUUID(), k -> new Burst(MAX_SHOTS, COOLDOWN_TICKS, MIN_GAP));
+        Burst burst = BURSTS.computeIfAbsent(player.getUUID(), k -> new Burst(maxShots(), cooldownTicks(), MIN_GAP));
+        burst.configure(maxShots(), cooldownTicks());
         if (!burst.tryUse(now)) return;
 
         Vec3 eye = player.getEyePosition();
@@ -55,7 +63,8 @@ public final class WebShotServer {
 
         if (hit != null && eye.distanceToSqr(hit.getLocation()) <= maxSq) {
             LivingEntity target = (LivingEntity) hit.getEntity();
-            target.hurt(level.damageSources().playerAttack(player), DAMAGE);
+            float damage = Config.SHOT_DAMAGE.get().floatValue();
+            if (damage > 0) target.hurt(level.damageSources().playerAttack(player), damage);
             BlockPos feet = target.blockPosition();
             spawnWeb(level, player, feet);
             spawnWeb(level, player, feet.above());
