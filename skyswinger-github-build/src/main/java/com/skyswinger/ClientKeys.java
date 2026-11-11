@@ -16,11 +16,14 @@ public final class ClientKeys {
             "key.skyswinger.zip", InputConstants.Type.KEYSYM, GLFW.GLFW_KEY_Z, "key.categories.skyswinger");
     public static final KeyMapping SHOOT = new KeyMapping(
             "key.skyswinger.shoot", InputConstants.Type.KEYSYM, GLFW.GLFW_KEY_V, "key.categories.skyswinger");
+    public static final KeyMapping TRICK = new KeyMapping(
+            "key.skyswinger.trick", InputConstants.Type.KEYSYM, GLFW.GLFW_KEY_G, "key.categories.skyswinger");
 
     @SubscribeEvent
     public static void register(RegisterKeyMappingsEvent event) {
         event.register(SWING);
         event.register(ZIP);
         event.register(SHOOT);
+        event.register(TRICK);
     }
 }

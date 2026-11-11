@@ -9,8 +9,10 @@ import net.neoforged.neoforge.network.registration.PayloadRegistrar;
 public final class NetworkSetup {
     @SubscribeEvent
     public static void register(RegisterPayloadHandlersEvent event) {
-        PayloadRegistrar registrar = event.registrar("1").optional();
+        PayloadRegistrar registrar = event.registrar("2").optional();
         registrar.playToServer(SwingPayload.TYPE, SwingPayload.CODEC, SwingPayload::handle);
         registrar.playToServer(WebShotPayload.TYPE, WebShotPayload.CODEC, WebShotPayload::handle);
+        registrar.playToServer(ActionPayload.TYPE, ActionPayload.CODEC, ActionPayload::handle);
+        registrar.playToClient(ActionSync.TYPE, ActionSync.CODEC, ActionSync::handle);
     }
 }

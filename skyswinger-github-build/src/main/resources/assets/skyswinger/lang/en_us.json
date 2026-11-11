@@ -3,9 +3,7 @@
   "key.skyswinger.swing": "Swing",
   "key.skyswinger.zip": "Web Zip",
   "key.skyswinger.shoot": "Web Shot",
-
   "skyswinger.configuration.title": "Sky Swinger Settings",
-
   "skyswinger.configuration.swinging": "Swinging",
   "skyswinger.configuration.maxSpeed": "Top Speed",
   "skyswinger.configuration.maxSpeed.tooltip": "Fastest you can go while swinging.",
@@ -17,7 +15,6 @@
   "skyswinger.configuration.anchorHeight.tooltip": "How many blocks above you the web attaches.",
   "skyswinger.configuration.useBlocksIfAimedAt": "Stick to Blocks",
   "skyswinger.configuration.useBlocksIfAimedAt.tooltip": "Attach to a block if you're aiming at one overhead.",
-
   "skyswinger.configuration.momentum": "Momentum",
   "skyswinger.configuration.releaseBoost": "Release Boost",
   "skyswinger.configuration.releaseBoost.tooltip": "Extra speed when you let go of the web.",
@@ -25,7 +22,6 @@
   "skyswinger.configuration.glideSeconds.tooltip": "How many seconds your speed carries after letting go.",
   "skyswinger.configuration.glideKeep": "Glide Momentum",
   "skyswinger.configuration.glideKeep.tooltip": "Speed kept each tick while gliding. Normal Minecraft is 0.91.",
-
   "skyswinger.configuration.zip": "Web Zip",
   "skyswinger.configuration.zipSpeed": "Zip Speed",
   "skyswinger.configuration.zipSpeed.tooltip": "How fast web zip pulls you.",
@@ -33,7 +29,6 @@
   "skyswinger.configuration.zipUses.tooltip": "How many zips you get before the cooldown.",
   "skyswinger.configuration.zipCooldownSeconds": "Zip Cooldown",
   "skyswinger.configuration.zipCooldownSeconds.tooltip": "Cooldown length in seconds.",
-
   "skyswinger.configuration.effects": "Effects",
   "skyswinger.configuration.soundVolume": "Sound Volume",
   "skyswinger.configuration.soundVolume.tooltip": "Volume of Sky Swinger sounds.",
@@ -45,7 +40,6 @@
   "skyswinger.configuration.speedFov.tooltip": "Widen your view when you go fast.",
   "skyswinger.configuration.webFadeOut": "Webs Fade Out",
   "skyswinger.configuration.webFadeOut.tooltip": "Webs go slack and fade after you let go.",
-
   "skyswinger.configuration.hud": "Display",
   "skyswinger.configuration.showHud": "Show Display",
   "skyswinger.configuration.showHud.tooltip": "Show the web and zip display.",
@@ -53,12 +47,21 @@
   "skyswinger.configuration.showSpeed.tooltip": "Show your speed while swinging.",
   "skyswinger.configuration.hudCorner": "Display Corner",
   "skyswinger.configuration.hudCorner.tooltip": "Which corner of the screen the display goes in.",
-
   "skyswinger.configuration.webShot": "Web Shot",
   "skyswinger.configuration.shots": "Shots Before Cooldown",
   "skyswinger.configuration.shots.tooltip": "How many web shots you get before the cooldown.",
   "skyswinger.configuration.cooldownSeconds": "Shot Cooldown",
   "skyswinger.configuration.cooldownSeconds.tooltip": "Cooldown length in seconds.",
   "skyswinger.configuration.damage": "Shot Damage",
-  "skyswinger.configuration.damage.tooltip": "Damage per web shot. 1 is half a heart."
+  "skyswinger.configuration.damage.tooltip": "Damage per web shot. 1 is half a heart.",
+  "key.skyswinger.trick": "Trick",
+  "skyswinger.configuration.webLeap": "Web Leap",
+  "skyswinger.configuration.webLeap.tooltip": "How high you leap when you shoot a web from the ground. 0 turns it off.",
+  "skyswinger.configuration.tricks": "Tricks",
+  "skyswinger.configuration.releaseFlips": "Release Flips",
+  "skyswinger.configuration.releaseFlips.tooltip": "Do a flip automatically when you let go at high speed.",
+  "skyswinger.configuration.showScore": "Show Points",
+  "skyswinger.configuration.showScore.tooltip": "Show trick points, combos and level-ups.",
+  "skyswinger.configuration.hudScale": "Display Size",
+  "skyswinger.configuration.hudScale.tooltip": "Size of the corner display."
 }

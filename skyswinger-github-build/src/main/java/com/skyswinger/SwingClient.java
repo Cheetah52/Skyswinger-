@@ -2,7 +2,10 @@ package com.skyswinger;
 
 import com.mojang.blaze3d.vertex.PoseStack;
 import com.mojang.blaze3d.vertex.VertexConsumer;
+import java.util.Map;
+
 import net.minecraft.client.Minecraft;
+import net.minecraft.client.multiplayer.ClientLevel;
 import net.minecraft.client.renderer.MultiBufferSource;
 import net.minecraft.client.renderer.RenderType;
 import net.minecraft.core.particles.ParticleTypes;
@@ -57,7 +60,7 @@ public final class SwingClient {
     static final Burst WEB_BURST = new Burst(10, 60, WebShotServer.MIN_GAP);
     static final Burst ZIP_BURST = new Burst(2, 60, 4);
 
-    private static final SoundEvent SFX_THWIP = sfx("entity.fishing_bobber.throw");
+    static final SoundEvent SFX_THWIP = sfx("entity.fishing_bobber.throw");
     private static final SoundEvent SFX_SPIT = sfx("entity.llama.spit");
     private static final SoundEvent SFX_STICK = sfx("entity.slime.squish_small");
     private static final SoundEvent SFX_ZIP = sfx("entity.fishing_bobber.retrieve");
@@ -81,6 +84,7 @@ public final class SwingClient {
     private static int looseR, looseG, looseB;
 
     private static WhooshSound whoosh;
+    private static ClientLevel lastLevel;
     private static int curAlpha = 255;
 
     private record Aim(Vec3 point, boolean hit) {}
@@ -133,11 +137,19 @@ public final class SwingClient {
         if (player != mc.player) return;
 
         syncBursts();
+        if (mc.level != lastLevel) {
+            AnimState.clear();
+            lastLevel = mc.level;
+        }
+        if (player.tickCount % 100 == 0 && mc.level != null) {
+            AnimState.all().keySet().removeIf(id -> mc.level.getEntity(id) == null);
+        }
         boolean usable = mc.screen == null && player.isAlive()
                 && !player.isSpectator() && !player.isPassenger();
 
         while (ClientKeys.SHOOT.consumeClick()) { if (usable) shootWeb(player); }
         while (ClientKeys.ZIP.consumeClick()) { if (usable) startZip(player); }
+        Tricks.tick(player, mc);
 
         if (zipTarget != null) {
             if (!usable) endZip(player); else doZip(player);
@@ -202,7 +214,8 @@ public final class SwingClient {
         playSfx(p, SFX_THWIP, 0.3f, 2.0f);
         playSfx(p, SFX_ZIP, 0.3f, 1.3f);
         startWhoosh(p);
-        PacketDistributor.sendToServer(new SwingPayload(true)); // fall-damage protection
+        Tricks.onWebAttach(p);
+        sendWeb(p, AnimState.ZIP, zipTarget); // also fall-damage protection
     }
 
     private static void doZip(Player p) {
@@ -221,11 +234,12 @@ public final class SwingClient {
         letGo(p, zipTarget, 150, 225, 255);
         zipTarget = null;
         p.setDeltaMovement(p.getDeltaMovement().scale(0.8));
-        PacketDistributor.sendToServer(new SwingPayload(false));
+        sendWeb(p, AnimState.NONE, null);
     }
 
     // ======== swing ========
     private static void attach(Player p) {
+        boolean grounded = p.onGround();
         Vec3 eye = p.getEyePosition();
         Vec3 look = p.getLookAngle();
         Vec3 target = null;
@@ -252,7 +266,14 @@ public final class SwingClient {
         playSfx(p, SFX_THWIP, 0.3f, 1.9f);
         playSfx(p, SFX_SPIT, 0.15f, 1.7f);
         startWhoosh(p);
-        PacketDistributor.sendToServer(new SwingPayload(true));
+        Tricks.onWebAttach(p);
+        // web leap: shooting a web from the ground launches you up into the swing
+        double leap = Config.LEAP.get();
+        if (grounded && leap > 0) {
+            Vec3 v = p.getDeltaMovement();
+            p.setDeltaMovement(v.x, leap, v.z);
+        }
+        sendWeb(p, AnimState.SWING, anchor);
     }
 
     private static void release(Player p) {
@@ -260,8 +281,27 @@ public final class SwingClient {
         anchor = null;
         glideTotal = Config.ticks(Config.GLIDE_SECONDS);
         glideTicks = glideTotal;
+        double speed = p.getDeltaMovement().length();
         p.setDeltaMovement(p.getDeltaMovement().scale(Config.RELEASE_BOOST.get()));
-        PacketDistributor.sendToServer(new SwingPayload(false));
+        sendWeb(p, AnimState.NONE, null);
+        Tricks.onRelease(p, speed);
+    }
+
+    /** Tell the server (and through it, your friends) what your web is doing. */
+    private static void sendWeb(Player p, int mode, Vec3 target) {
+        AnimState s = AnimState.of(p);
+        s.mode = mode;
+        if (target != null) {
+            s.target = target;
+            s.attachTime = p.level().getGameTime();
+        }
+        Vec3 t = target == null ? Vec3.ZERO : target;
+        PacketDistributor.sendToServer(new ActionPayload(ActionPayload.WEB, mode, t.x, t.y, t.z));
+    }
+
+    /** Where a web leaves a player's hand. */
+    public static Vec3 handPos(Player p, float pt) {
+        return hand(p, pt);
     }
 
     /** Leave the web behind so it can go slack and fade instead of vanishing. */
@@ -467,6 +507,50 @@ public final class SwingClient {
         }
     }
 
+    private static void drawLoose(PoseStack.Pose pose, VertexConsumer vc, Vec3 from, Vec3 to, Vec3 vel, float age,
+                                  int r, int g, int b) {
+        float life = 1.0f - age / LOOSE_WEB_TICKS;
+        if (life <= 0f) return;
+        curAlpha = (int) Mth.clamp(255.0f * life, 0.0f, 255.0f);
+        // the free end drifts a little and falls
+        Vec3 end = to.add(vel.scale(Math.min(age, 8.0f))).add(0, -0.03 * age * age, 0);
+        double sag = Math.min(8.0, age * 0.4);
+        slackWeb(pose, vc, from, end, sag, r, g, b);
+        Vec3 d = from.subtract(end);
+        if (d.lengthSqr() > 1.0E-4) splat(pose, vc, from, d.normalize(), 1.3 * life, r, g, b);
+        curAlpha = 255;
+    }
+
+    /** Is any other player's web on screen? */
+    private static boolean othersVisible(Player me, long now) {
+        for (Map.Entry<Integer, AnimState> e : AnimState.all().entrySet()) {
+            if (e.getKey() == me.getId()) continue;
+            AnimState s = e.getValue();
+            if (s.mode != AnimState.NONE && s.target != null) return true;
+            if (s.looseFrom != null && now - s.looseTime < LOOSE_WEB_TICKS) return true;
+        }
+        return false;
+    }
+
+    /** Draw your friends' webs. */
+    private static void drawOthers(PoseStack.Pose pose, VertexConsumer vc, Player me, long now, float pt, float time) {
+        for (Map.Entry<Integer, AnimState> e : AnimState.all().entrySet()) {
+            if (e.getKey() == me.getId()) continue;
+            if (!(me.level().getEntity(e.getKey()) instanceof Player other)) continue;
+            AnimState s = e.getValue();
+            Vec3 h = hand(other, pt);
+            if (s.mode == AnimState.SWING && s.target != null) {
+                web(pose, vc, h, reach(h, s.target, s.attachTime, now, pt), time, 250, 250, 255, false);
+                if (now - s.attachTime >= 3) splat(pose, vc, s.target, s.target.subtract(h).normalize(), 1.3, 250, 250, 255);
+            } else if (s.mode == AnimState.ZIP && s.target != null) {
+                web(pose, vc, h, reach(h, s.target, s.attachTime, now, pt), time, 150, 225, 255, false);
+            }
+            if (s.looseFrom != null && s.looseTo != null && now - s.looseTime < LOOSE_WEB_TICKS) {
+                drawLoose(pose, vc, s.looseFrom, s.looseTo, Vec3.ZERO, now - s.looseTime + pt, 250, 250, 255);
+            }
+        }
+    }
+
     @SubscribeEvent
     public static void onRender(RenderLevelStageEvent event) {
         if (event.getStage() != RenderLevelStageEvent.Stage.AFTER_PARTICLES) return;
@@ -477,7 +561,8 @@ public final class SwingClient {
         boolean shot = shotEnd != null && now <= shotUntil;
         boolean loose = looseFrom != null && now - looseTime < LOOSE_WEB_TICKS;
         if (!loose) looseFrom = null;
-        if (anchor == null && zipTarget == null && !shot && !loose) return;
+        boolean others = othersVisible(p, now);
+        if (anchor == null && zipTarget == null && !shot && !loose && !others) return;
 
         float pt = event.getPartialTick().getGameTimeDeltaPartialTick(true);
         float time = now + pt;
@@ -516,17 +601,9 @@ public final class SwingClient {
             curAlpha = 255;
         }
         if (loose) {
-            float age = now - looseTime + pt;
-            float life = 1.0f - age / LOOSE_WEB_TICKS;
-            curAlpha = (int) Mth.clamp(255.0f * life, 0.0f, 255.0f);
-            // the free end drifts a little and falls
-            Vec3 end = looseTo.add(looseVel.scale(Math.min(age, 8.0f))).add(0, -0.03 * age * age, 0);
-            double sag = Math.min(8.0, age * 0.4);
-            slackWeb(pose, vc, looseFrom, end, sag, looseR, looseG, looseB);
-            Vec3 d = looseFrom.subtract(end);
-            if (d.lengthSqr() > 1.0E-4) splat(pose, vc, looseFrom, d.normalize(), 1.3 * life, looseR, looseG, looseB);
-            curAlpha = 255;
+            drawLoose(pose, vc, looseFrom, looseTo, looseVel, now - looseTime + pt, looseR, looseG, looseB);
         }
+        if (others) drawOthers(pose, vc, p, now, pt, time);
 
         ps.popPose();
         buffers.endBatch(RenderType.lines());

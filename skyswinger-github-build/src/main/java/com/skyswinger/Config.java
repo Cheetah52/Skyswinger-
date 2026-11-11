@@ -14,6 +14,9 @@ public final class Config {
     public static final ModConfigSpec CLIENT_SPEC;
     public static final ModConfigSpec.DoubleValue MAX_SPEED, SWING_KEEP, PUMP, ANCHOR_HEIGHT;
     public static final ModConfigSpec.BooleanValue USE_BLOCKS;
+    public static final ModConfigSpec.DoubleValue LEAP;
+    public static final ModConfigSpec.BooleanValue RELEASE_FLIPS, SHOW_SCORE;
+    public static final ModConfigSpec.DoubleValue HUD_SCALE;
     public static final ModConfigSpec.DoubleValue RELEASE_BOOST, GLIDE_SECONDS, GLIDE_KEEP;
     public static final ModConfigSpec.DoubleValue ZIP_SPEED, ZIP_COOLDOWN;
     public static final ModConfigSpec.IntValue ZIP_USES;
@@ -39,6 +42,13 @@ public final class Config {
                 .defineInRange("anchorHeight", 40.0, 10.0, 80.0);
         USE_BLOCKS = b.comment("Attach to a block if you're aiming at one overhead")
                 .define("useBlocksIfAimedAt", false);
+        LEAP = b.comment("How high you leap when you shoot a web from the ground (0 = off)")
+                .defineInRange("webLeap", 1.1, 0.0, 2.5);
+        b.pop();
+
+        b.push("tricks");
+        RELEASE_FLIPS = b.comment("Do a flip automatically when you let go at high speed").define("releaseFlips", true);
+        SHOW_SCORE = b.comment("Show trick points, combos and level-ups").define("showScore", true);
         b.pop();
 
         b.push("momentum");
@@ -69,6 +79,7 @@ public final class Config {
         SHOW_SPEED = b.comment("Show your speed while swinging").define("showSpeed", true);
         HUD_CORNER = b.comment("Which corner of the screen the display goes in")
                 .defineEnum("hudCorner", HudCorner.BOTTOM_RIGHT);
+        HUD_SCALE = b.comment("Size of the display").defineInRange("hudScale", 1.0, 0.5, 2.0);
         b.pop();
 
         CLIENT_SPEC = b.build();

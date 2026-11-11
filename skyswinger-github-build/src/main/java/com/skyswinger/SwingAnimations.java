@@ -2,9 +2,11 @@ package com.skyswinger;
 
 import com.mojang.blaze3d.vertex.PoseStack;
 import net.minecraft.client.Minecraft;
-import net.minecraft.client.model.HumanoidModel;
 import net.minecraft.client.model.PlayerModel;
+import net.minecraft.client.model.geom.ModelPart;
 import net.minecraft.client.player.AbstractClientPlayer;
+import net.minecraft.util.Mth;
+import net.minecraft.world.entity.LivingEntity;
 import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.phys.Vec3;
 import net.neoforged.api.distmarker.Dist;
@@ -14,72 +16,250 @@ import net.neoforged.neoforge.client.event.RenderPlayerEvent;
 import org.joml.Quaternionf;
 
 /**
- * Body animations (third person, F5):
- * - Swinging: your body lines up with the web, your arm reaches up along it,
- *   and you tuck when you whip through the bottom of the arc.
- * - Zipping: both arms forward and you lean toward where you're going.
+ * Animations for you and your friends (see yourself with F5).
+ * - Whole-body movement (leaning along the web, flips, spins, rolls) happens in onRenderPre.
+ * - Arm and leg poses happen in poseModel, called from PlayerModelMixin after vanilla's animation,
+ *   so the walking animation no longer plays in the air.
  */
 @EventBusSubscriber(modid = SkySwinger.MODID, value = Dist.CLIENT)
 public final class SwingAnimations {
-    private static final double MAX_LEAN = Math.toRadians(70);
-    private static final Vec3 UP = new Vec3(0, 1, 0);
+    public enum Kind { NONE, SWING, ZIP, TRICK, ROLL, SWAN, FALL, GLIDE }
 
-    private static Vec3 lean = UP;     // smoothed direction the body's "up" points
+    private static final double MAX_LEAN = Math.toRadians(75);
+    private static final Vec3 UP = new Vec3(0, 1, 0);
+    private static final float TAU = (float) (Math.PI * 2.0);
+    private static final float PI = (float) Math.PI;
+
     private static boolean pushed;
 
+    // ======== what pose is this player in? ========
+    public static Kind kind(Player p, AnimState s) {
+        if (s == null || !Config.ANIMATIONS.get()) return Kind.NONE;
+        if (s.mode == AnimState.SWING && s.target != null) return Kind.SWING;
+        if (s.mode == AnimState.ZIP && s.target != null) return Kind.ZIP;
+        float age = p.tickCount;
+        if (s.trick == Trick.LANDING_ROLL && s.inTrick(age)) return Kind.ROLL;
+        if (s.trick == Trick.SWAN_DIVE) return Kind.SWAN;
+        if (s.inTrick(age)) return Kind.TRICK;
+
+        boolean air = !p.onGround() && !p.isInWater() && !p.getAbilities().flying && !p.isFallFlying() && !p.isPassenger();
+        if (!air) return Kind.NONE;
+        double vy = p.getY() - p.yo;
+        double h = Math.sqrt(sq(p.getX() - p.xo) + sq(p.getZ() - p.zo));
+        if (vy < -0.6) return Kind.FALL;
+        if (h > 0.6) return Kind.GLIDE;
+        return Kind.NONE;
+    }
+
+    // ======== whole body: lean + flips ========
     @SubscribeEvent
     public static void onRenderPre(RenderPlayerEvent.Pre event) {
         pushed = false;
-        Player player = event.getEntity();
+        Player p = event.getEntity();
         Minecraft mc = Minecraft.getInstance();
-        if (player != mc.player || mc.screen != null || !Config.ANIMATIONS.get()) return;
-
-        float pt = event.getPartialTick();
-        PlayerModel<AbstractClientPlayer> model = event.getRenderer().getModel();
-        Vec3 center = player.getPosition(pt).add(0, player.getBbHeight() * 0.5, 0);
-
-        Vec3 target = UP;
-        if (SwingClient.isZipping()) {
-            model.rightArmPose = HumanoidModel.ArmPose.CROSSBOW_HOLD; // both arms forward
-            model.leftArmPose = HumanoidModel.ArmPose.EMPTY;
-            Vec3 to = SwingClient.zipTarget().subtract(center);
-            if (to.lengthSqr() > 1.0E-4) target = UP.lerp(to.normalize(), 0.6).normalize();
-        } else if (SwingClient.isSwinging()) {
-            model.rightArmPose = HumanoidModel.ArmPose.THROW_SPEAR;  // arm straight up along the web
-            Vec3 to = SwingClient.anchor().subtract(center);
-            if (to.lengthSqr() > 1.0E-4) {
-                Vec3 rope = to.normalize();
-                target = rope;
-                if (rope.y > 0.9 && player.getDeltaMovement().length() > 0.9) {
-                    model.crouching = true; // tuck at the bottom of the swing
-                }
-            }
+        if (p == mc.player && mc.screen != null) return; // inventory preview
+        AnimState s = AnimState.find(p);
+        Kind kind = kind(p, s);
+        if (kind == Kind.NONE) {
+            if (s != null) s.lean = UP;
+            return;
         }
 
-        lean = lean.lerp(target, 0.2).normalize();
-        double angle = Math.min(Math.acos(Math.max(-1.0, Math.min(1.0, lean.y))), MAX_LEAN);
-        if (angle < 0.01) return;
+        PlayerModel<AbstractClientPlayer> model = event.getRenderer().getModel();
+        model.crouching = false; // our poses replace the crouch pose
 
-        // rotate around the axis between "straight up" and the lean direction
-        double ax = lean.z, az = -lean.x;
-        double len = Math.sqrt(ax * ax + az * az);
-        if (len < 1.0E-4) return;
+        float pt = event.getPartialTick();
+        float age = p.tickCount + pt;
+        float bodyYaw = Mth.rotLerp(pt, p.yBodyRotO, p.yBodyRot);
+        Vec3 fwd = forward(bodyYaw);
+        Vec3 center = p.getPosition(pt).add(0, p.getBbHeight() * 0.5, 0);
+
+        Vec3 target = UP;
+        switch (kind) {
+            case SWING -> {
+                Vec3 to = s.target.subtract(center);
+                if (to.lengthSqr() > 1.0E-4) target = to.normalize(); // body hangs in line with the web
+            }
+            case ZIP -> {
+                Vec3 to = s.target.subtract(center);
+                if (to.lengthSqr() > 1.0E-4) target = UP.lerp(to.normalize(), 0.65).normalize();
+            }
+            case SWAN -> target = fwd.scale(0.85).add(0, -0.35, 0).normalize();  // head-first dive
+            case FALL -> target = fwd.scale(0.9).add(0, 0.25, 0).normalize();    // belly-down skydive
+            case GLIDE -> {
+                Vec3 hv = new Vec3(p.getX() - p.xo, 0, p.getZ() - p.zo);
+                if (hv.lengthSqr() > 1.0E-4) target = UP.lerp(hv.normalize(), 0.35).normalize();
+            }
+            default -> { }
+        }
+        s.lean = s.lean.lerp(target, 0.18).normalize();
 
         PoseStack ps = event.getPoseStack();
         ps.pushPose();
-        float pivot = player.getBbHeight() * 0.5f;
-        ps.translate(0, pivot, 0);
-        ps.mulPose(new Quaternionf().rotationAxis((float) angle, (float) (ax / len), 0f, (float) (az / len)));
-        ps.translate(0, -pivot, 0);
         pushed = true;
+        float pivot = kind == Kind.ROLL ? 0.45f : p.getBbHeight() * 0.5f;
+        ps.translate(0, pivot, 0);
+        applyLean(ps, s.lean);
+        if (kind == Kind.TRICK || kind == Kind.ROLL) applyTrick(ps, s.trick, s.trickProgress(age), bodyYaw);
+        ps.translate(0, -pivot, 0);
     }
 
     @SubscribeEvent
     public static void onRenderPost(RenderPlayerEvent.Post event) {
-        if (pushed && event.getEntity() == Minecraft.getInstance().player) {
+        if (pushed) {
             event.getPoseStack().popPose();
             pushed = false;
         }
+    }
+
+    private static void applyLean(PoseStack ps, Vec3 lean) {
+        double angle = Math.min(Math.acos(Mth.clamp(lean.y, -1.0, 1.0)), MAX_LEAN);
+        if (angle < 0.01) return;
+        double ax = lean.z, az = -lean.x;
+        double len = Math.sqrt(ax * ax + az * az);
+        if (len < 1.0E-4) return;
+        rot(ps, (float) angle, (float) (ax / len), 0f, (float) (az / len));
+    }
+
+    private static void applyTrick(PoseStack ps, Trick t, float prog, float bodyYaw) {
+        float e = 1f - (1f - prog) * (1f - prog); // fast start, smooth finish
+        double yaw = Math.toRadians(bodyYaw);
+        float fx = (float) -Math.sin(yaw), fz = (float) Math.cos(yaw);   // forward
+        float rx = (float) -Math.cos(yaw), rz = (float) -Math.sin(yaw);  // right
+        switch (t) {
+            case FRONT_FLIP, RELEASE_FLIP, DOUBLE_FRONT_FLIP, LANDING_ROLL -> rot(ps, -TAU * e, rx, 0, rz);
+            case BACKFLIP, DOUBLE_BACKFLIP -> rot(ps, TAU * e, rx, 0, rz);
+            case SIDE_FLIP_LEFT -> rot(ps, -TAU * e, fx, 0, fz);
+            case SIDE_FLIP_RIGHT -> rot(ps, TAU * e, fx, 0, fz);
+            case SPIN -> rot(ps, TAU * e, 0, 1, 0);
+            case CORKSCREW -> {
+                rot(ps, TAU * e, 0, 1, 0);
+                rot(ps, TAU * e, fx, 0, fz);
+            }
+            default -> { }
+        }
+    }
+
+    private static void rot(PoseStack ps, float angle, float x, float y, float z) {
+        ps.mulPose(new Quaternionf().rotationAxis(angle, x, y, z));
+    }
+
+    // ======== arms and legs (called from PlayerModelMixin) ========
+    public static void poseModel(PlayerModel<?> m, LivingEntity entity, float age) {
+        if (!(entity instanceof Player p)) return;
+        AnimState s = AnimState.find(p);
+        Kind kind = kind(p, s);
+        if (kind == Kind.NONE) return;
+
+        float wob = Mth.sin(age * 0.55f) * 0.06f; // little flutter so it doesn't look frozen
+        Vec3 vel = new Vec3(p.getX() - p.xo, p.getY() - p.yo, p.getZ() - p.zo);
+
+        switch (kind) {
+            case SWING -> poseSwing(m, p, s, vel);
+            case ZIP -> {
+                // both arms reach toward where you're going, legs trail behind
+                set(m.rightArm, -2.75f, 0f, 0.14f);
+                set(m.leftArm, -2.75f, 0f, -0.14f);
+                set(m.rightLeg, 0.35f + wob, 0f, 0.05f);
+                set(m.leftLeg, 0.22f - wob, 0f, -0.05f);
+            }
+            case TRICK, ROLL -> poseTrick(m, s.trick, wob);
+            case SWAN -> {
+                // arms spread wide like wings, legs straight together
+                set(m.rightArm, 0.1f, 0f, 1.45f + wob);
+                set(m.leftArm, 0.1f, 0f, -1.45f - wob);
+                set(m.rightLeg, 0.05f, 0f, 0.03f);
+                set(m.leftLeg, 0.05f, 0f, -0.03f);
+            }
+            case FALL -> {
+                // skydive: arms and legs spread
+                set(m.rightArm, -0.4f + wob, 0f, 2.0f);
+                set(m.leftArm, -0.4f - wob, 0f, -2.0f);
+                set(m.rightLeg, 0.25f + wob, 0f, 0.35f);
+                set(m.leftLeg, 0.25f - wob, 0f, -0.35f);
+            }
+            case GLIDE -> {
+                // arms swept back, legs trailing
+                set(m.rightArm, 0.55f, 0f, 0.35f + wob);
+                set(m.leftArm, 0.55f, 0f, -0.35f - wob);
+                set(m.rightLeg, 0.35f + wob, 0f, 0.06f);
+                set(m.leftLeg, 0.15f - wob, 0f, -0.06f);
+            }
+            default -> { }
+        }
+
+        // keep the outer skin layer in place
+        m.rightSleeve.copyFrom(m.rightArm);
+        m.leftSleeve.copyFrom(m.leftArm);
+        m.rightPants.copyFrom(m.rightLeg);
+        m.leftPants.copyFrom(m.leftLeg);
+        m.jacket.copyFrom(m.body);
+    }
+
+    private static void poseSwing(PlayerModel<?> m, Player p, AnimState s, Vec3 vel) {
+        Vec3 fwd = forward(p.yBodyRot);
+        double forwardSpeed = vel.x * fwd.x + vel.z * fwd.z;
+        float trail = (float) Mth.clamp(forwardSpeed * 0.6, -0.9, 0.9); // legs swing behind like a pendulum
+
+        Vec3 center = p.position().add(0, p.getBbHeight() * 0.5, 0);
+        Vec3 to = s.target.subtract(center);
+        double ropeY = to.lengthSqr() > 1.0E-4 ? to.normalize().y : 1.0;
+        double speed = vel.length();
+        float tuck = (float) (Mth.clamp((speed - 0.6) / 0.6, 0.0, 1.0) * Mth.clamp((ropeY - 0.85) / 0.1, 0.0, 1.0));
+        float legX = Mth.lerp(tuck, trail, -1.1f); // knees up through the bottom of the arc
+
+        // web arm reaches straight up along the web (the body is lined up with it)
+        set(m.rightArm, -PI + 0.05f, 0f, 0.08f);
+        // free arm out for balance
+        set(m.leftArm, -0.3f - trail * 0.3f, 0f, -1.1f + tuck * 0.5f);
+        set(m.rightLeg, legX + 0.08f, 0f, 0.05f);
+        set(m.leftLeg, legX - 0.04f, 0f, -0.05f);
+    }
+
+    private static void poseTrick(PlayerModel<?> m, Trick t, float wob) {
+        switch (t) {
+            case SPIN -> {
+                set(m.rightArm, 0f, 0f, 1.4f);
+                set(m.leftArm, 0f, 0f, -1.4f);
+                set(m.rightLeg, 0f, 0f, 0.03f);
+                set(m.leftLeg, 0f, 0f, -0.03f);
+            }
+            case CORKSCREW -> {
+                // tight "pencil" shape spins fastest
+                set(m.rightArm, 0f, 0f, 0.05f);
+                set(m.leftArm, 0f, 0f, -0.05f);
+                set(m.rightLeg, 0f, 0f, 0.02f);
+                set(m.leftLeg, 0f, 0f, -0.02f);
+            }
+            case SIDE_FLIP_LEFT, SIDE_FLIP_RIGHT -> {
+                set(m.rightArm, -0.2f, 0f, 1.3f);
+                set(m.leftArm, -0.2f, 0f, -1.3f);
+                set(m.rightLeg, 0f, 0f, 0.45f);
+                set(m.leftLeg, 0f, 0f, -0.45f);
+            }
+            default -> {
+                // flips and rolls: tucked into a ball
+                set(m.rightArm, -0.9f, 0f, 0.25f);
+                set(m.leftArm, -0.9f, 0f, -0.25f);
+                set(m.rightLeg, -1.35f, 0f, 0.1f);
+                set(m.leftLeg, -1.35f, 0f, -0.1f);
+            }
+        }
+    }
+
+    private static void set(ModelPart part, float x, float y, float z) {
+        part.xRot = x;
+        part.yRot = y;
+        part.zRot = z;
+    }
+
+    private static Vec3 forward(float yawDeg) {
+        double yaw = Math.toRadians(yawDeg);
+        return new Vec3(-Math.sin(yaw), 0, Math.cos(yaw));
+    }
+
+    private static double sq(double v) {
+        return v * v;
     }
 
     private SwingAnimations() {}
