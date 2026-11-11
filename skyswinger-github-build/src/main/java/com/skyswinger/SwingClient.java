@@ -31,7 +31,8 @@ import net.neoforged.neoforge.network.PacketDistributor;
 
 /**
  * R (hold)  swing on a web that attaches ANCHOR_HEIGHT_ABOVE blocks above you (one web per press)
- * W/A/S/D   steer/pump       Shift reel in      Space let out
+ * W/A/S/D   pump the swing (only near the bottom, only along your swing, can't loop over the top)
+ * Shift     reel in      Space let out
  * Z         web zip (2 uses, then 3 second cooldown)
  * V         web shot: cobweb + tiny damage (10 shots, then 3 second cooldown)
  */
@@ -44,10 +45,19 @@ public final class SwingClient {
     private static final double ANCHOR_HEIGHT_ABOVE = 40.0; // the web always attaches this many blocks above you
     private static final double MIN_ROPE = 4.0, MAX_ROPE = 100.0;
     private static final double MAX_SPEED = 4.5;
-    private static final double DRAG_COMP = 1.08;
-    private static final double PUMP = 0.045;
-    private static final double MOMENTUM_GAIN = 0.05;
-    private static final double RELEASE_BOOST = 1.15;
+
+    // momentum
+    private static final double SWING_KEEP = 0.995;      // speed kept each tick while swinging (1.0 = never slows down)
+    private static final double RELEASE_BOOST = 1.15;    // extra speed when you let go
+    private static final int GLIDE_TICKS = 40;           // how long momentum carries after letting go (40 = 2 seconds)
+    private static final double GLIDE_KEEP = 0.985;      // speed kept each tick at the start of the glide (vanilla is 0.91)
+
+    // realistic pumping (W/A/S/D)
+    private static final double PUMP = 0.04;             // how hard pumping pushes
+    private static final double PUMP_ZONE = 0.82;        // pumping only works near the bottom (within about 35 degrees)
+    private static final double PUMP_HEIGHT_LIMIT = 2.0; // pumping stops once your swing would reach this close to the anchor's height
+    private static final double BRAKE = 0.5;             // pressing against your swing slows it (fraction of PUMP)
+
     private static final double ZIP_RANGE = 60.0, ZIP_AIR_DISTANCE = 30.0, ZIP_SPEED = 1.8;
     private static final int ZIP_MAX_TICKS = 30;
     private static final int ZIP_MAX_USES = 2;          // zips before the cooldown
@@ -55,6 +65,10 @@ public final class SwingClient {
     private static final double SHOT_RANGE = 40.0;
     private static final float SOUND_VOLUME = 1.0f;     // master volume for the sound effects (0 = silent)
     // ---------------------
+
+    // vanilla physics values (don't change)
+    private static final double GRAVITY = 0.08;
+    private static final double AIR_DRAG_XZ = 0.91, AIR_DRAG_Y = 0.98;
 
     private static final Burst WEB_BURST =
             new Burst(WebShotServer.MAX_SHOTS, WebShotServer.COOLDOWN_TICKS, WebShotServer.MIN_GAP);
@@ -67,6 +81,7 @@ public final class SwingClient {
     private static Vec3 anchor;
     private static double ropeLength;
     private static long attachTime, zipStart, shotStart;
+    private static int glideTicks;
 
     private static Vec3 zipTarget;
     private static int zipTicks;
@@ -123,6 +138,7 @@ public final class SwingClient {
             release(player);
         }
         if (anchor != null) swing(player, mc);
+        else glide(player);
     }
 
     // ======== aiming ========
@@ -157,6 +173,7 @@ public final class SwingClient {
         long now = p.level().getGameTime();
         if (!ZIP_BURST.tryUse(now)) return;
         anchor = null; // cancels any swing
+        glideTicks = 0;
         Aim a = aim(p, ZIP_RANGE);
         zipTarget = a.hit() ? a.point() : p.getEyePosition().add(p.getLookAngle().scale(ZIP_AIR_DISTANCE));
         zipTicks = 0;
@@ -203,6 +220,7 @@ public final class SwingClient {
         }
 
         anchor = target;
+        glideTicks = 0;
         ropeLength = Mth.clamp(center(p).distanceTo(anchor), MIN_ROPE, MAX_ROPE);
         attachTime = p.level().getGameTime();
         playSfx(p, SFX_ATTACH, 0.25f, 1.7f);
@@ -211,8 +229,25 @@ public final class SwingClient {
 
     private static void release(Player p) {
         anchor = null;
+        glideTicks = GLIDE_TICKS;
         p.setDeltaMovement(p.getDeltaMovement().scale(RELEASE_BOOST));
         PacketDistributor.sendToServer(new SwingPayload(false));
+    }
+
+    /** After letting go, cancel most of vanilla's air drag for a moment so your speed carries. */
+    private static void glide(Player p) {
+        if (glideTicks <= 0) return;
+        if (p.onGround() || p.isInWater() || p.isInLava() || p.isFallFlying() || p.getAbilities().flying) {
+            glideTicks = 0;
+            return;
+        }
+        double fade = glideTicks / (double) GLIDE_TICKS;          // 1 right after release, 0 at the end
+        double keep = Mth.lerp(fade, AIR_DRAG_XZ, GLIDE_KEEP);    // eases back to normal air drag
+        double comp = keep / AIR_DRAG_XZ;
+        Vec3 v = p.getDeltaMovement();
+        p.setDeltaMovement(v.x * comp, v.y, v.z * comp);
+        glideTicks--;
+        trail(p);
     }
 
     private static void swing(Player p, Minecraft mc) {
@@ -235,25 +270,11 @@ public final class SwingClient {
         }
 
         if (!p.onGround()) {
-            v = new Vec3(v.x * DRAG_COMP, v.y, v.z * DRAG_COMP);
-
-            // build momentum: speed up along the direction you're already swinging
-            double radialNow = v.dot(dir);
-            Vec3 tangent = v.subtract(dir.scale(radialNow));
-            if (tangent.length() > 0.05) {
-                v = v.add(tangent.scale(MOMENTUM_GAIN));
-            }
-
-            double f = (mc.options.keyUp.isDown() ? 1 : 0) - (mc.options.keyDown.isDown() ? 1 : 0);
-            double s = (mc.options.keyLeft.isDown() ? 1 : 0) - (mc.options.keyRight.isDown() ? 1 : 0);
-            if (f != 0 || s != 0) {
-                double yaw = Math.toRadians(p.getYRot());
-                double fx = -Math.sin(yaw), fz = Math.cos(yaw);
-                double lx = Math.cos(yaw), lz = Math.sin(yaw);
-                double ax = fx * f + lx * s, az = fz * f + lz * s;
-                double len = Math.sqrt(ax * ax + az * az);
-                v = v.add(ax / len * PUMP, 0, az / len * PUMP);
-            }
+            // cancel most of vanilla's air drag so the swing keeps its speed (gravity still applies)
+            v = new Vec3(v.x * SWING_KEEP / AIR_DRAG_XZ,
+                         v.y * SWING_KEEP / AIR_DRAG_Y,
+                         v.z * SWING_KEEP / AIR_DRAG_XZ);
+            v = pump(p, mc, v, dir);
         }
 
         double speed = v.length();
@@ -262,6 +283,43 @@ public final class SwingClient {
         p.setDeltaMovement(v);
         p.fallDistance = 0;
         trail(p);
+    }
+
+    /**
+     * Realistic pumping, like a playground swing:
+     * - only works near the bottom of the arc
+     * - only pushes along the way you're already swinging (pressing the other way brakes)
+     * - stops adding speed once you'd swing up to about the anchor's height, so you can't loop over
+     */
+    private static Vec3 pump(Player p, Minecraft mc, Vec3 v, Vec3 dir) {
+        double f = (mc.options.keyUp.isDown() ? 1 : 0) - (mc.options.keyDown.isDown() ? 1 : 0);
+        double s = (mc.options.keyLeft.isDown() ? 1 : 0) - (mc.options.keyRight.isDown() ? 1 : 0);
+        if (f == 0 && s == 0) return v;
+        if (dir.y < PUMP_ZONE) return v; // too far up the arc to pump
+
+        double yaw = Math.toRadians(p.getYRot());
+        double fx = -Math.sin(yaw), fz = Math.cos(yaw);
+        double lx = Math.cos(yaw), lz = Math.sin(yaw);
+        Vec3 input = new Vec3(fx * f + lx * s, 0, fz * f + lz * s).normalize();
+
+        Vec3 tangent = v.subtract(dir.scale(v.dot(dir)));
+        if (tangent.length() > 0.05) {
+            Vec3 t = tangent.normalize();
+            double along = input.dot(t);
+            if (along > 0) {
+                // how high this swing could carry you, compared to the anchor
+                double height = center(p).y - anchor.y;
+                double reach = height + v.lengthSqr() / (2.0 * GRAVITY);
+                if (reach > -PUMP_HEIGHT_LIMIT) return v; // already as big as a real swing gets
+                return v.add(t.scale(along * PUMP));
+            }
+            return v.add(t.scale(along * PUMP * BRAKE)); // pushing against the swing slows it
+        }
+
+        // hanging still: start a swing in the direction you press
+        Vec3 start = input.subtract(dir.scale(input.dot(dir)));
+        if (start.lengthSqr() < 1.0E-6) return v;
+        return v.add(start.normalize().scale(PUMP));
     }
 
     // ======== wider FOV with speed ========
