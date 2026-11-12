@@ -75,6 +75,28 @@ public final class SwingClient {
     static final Burst ZIP_BURST = new Burst(2, 60, 4);
     static final Burst TRAP_BURST = new Burst(1, WebShotServer.TRAP_COOLDOWN, 0);
     static final Burst PULL_BURST = new Burst(1, 25, 0);
+    static final Burst WEB_BURST_COOLDOWN = new Burst(1, CombatServer.BURST_COOLDOWN, 0);
+
+    // Update 5 moves
+    private static final int GLIDE_MAX_TICKS = 200;       // web glide lasts up to 10 seconds
+    private static final double GLIDE_FALL = 0.12;        // blocks per tick you sink while gliding
+    private static final double GLIDE_SPEED = 0.75;       // forward glide speed
+    private static final int LEAP_MAX_CHARGE = 20;        // 1 second of charge = full leap
+    private static final int LEAP_MIN_CHARGE = 6;
+    private static final double SLAM_SPEED = 2.4;
+    private static final double BURST_RANGE = 8.0;
+    private static final double XP_DISTANCE = 40.0;       // swing this many blocks for 1 Web XP
+
+    private static int glideAirTicks;                     // glide time used this jump
+    private static boolean gliding, slamming;
+    private static double slamFallStart;
+    private static int leapCharge;
+    private static float pendingLeap;
+    private static boolean leapJumpWasDown;
+    private static boolean burstLatch;
+    private static long burstTime = -1000;
+    private static double xpDistance;
+    private static int lastSkillMask = -1;
 
     static final SoundEvent SFX_THWIP = sfx("entity.fishing_bobber.throw");
     private static final SoundEvent SFX_SPIT = sfx("entity.llama.spit");
@@ -127,9 +149,15 @@ public final class SwingClient {
     // ======== used by the HUD, sounds and animations ========
     public static boolean isSwinging() { return anchor != null; }
     public static boolean isZipping() { return zipTarget != null; }
-    public static boolean isMoving() { return anchor != null || zipTarget != null || glideTicks > 0 || diving || wallRunTicks > 0; }
+    public static boolean isMoving() {
+        return anchor != null || zipTarget != null || glideTicks > 0 || diving || wallRunTicks > 0 || gliding || slamming;
+    }
     public static boolean isDiving() { return diving; }
     public static boolean isWallRunning() { return wallRunTicks > 0; }
+    public static boolean isSlamming() { return slamming; }
+    public static boolean isGliding() { return gliding; }
+    /** 0..1 how charged the charged leap is (0 = not charging). */
+    public static float leapCharge() { return leapCharge < 3 ? 0f : Math.min(1f, leapCharge / (float) LEAP_MAX_CHARGE); }
     /** 0..1 wrist flick right after a web shot (for the first-person hand). */
     public static float shotFlick(float pt) {
         Minecraft mc = Minecraft.getInstance();
@@ -171,8 +199,12 @@ public final class SwingClient {
 
     /** Keep the cooldowns in line with the settings. */
     private static void syncBursts() {
-        WEB_BURST.configure(WebShotServer.maxShots(), WebShotServer.cooldownTicks());
-        ZIP_BURST.configure(Config.ZIP_USES.get(), Config.ticks(Config.ZIP_COOLDOWN));
+        boolean quick = StyleScore.has(Skill.QUICK_RELOAD);
+        WEB_BURST.configure(WebShotServer.maxShots(), Gear.cooldown(WebShotServer.cooldownTicks(), quick));
+        ZIP_BURST.configure(Config.ZIP_USES.get(), Gear.cooldown(Config.ticks(Config.ZIP_COOLDOWN), quick));
+        TRAP_BURST.configure(1, Gear.cooldown(WebShotServer.TRAP_COOLDOWN, quick));
+        PULL_BURST.configure(1, Gear.cooldown(25, quick));
+        WEB_BURST_COOLDOWN.configure(1, Gear.cooldown(CombatServer.BURST_COOLDOWN, quick));
     }
 
     // ======== tick ========
@@ -194,6 +226,27 @@ public final class SwingClient {
         boolean usable = mc.screen == null && player.isAlive()
                 && !player.isSpectator() && !player.isPassenger();
 
+        // tell the server which skills you have (when it changes)
+        int mask = StyleScore.mask();
+        if (mask != lastSkillMask) {
+            lastSkillMask = mask;
+            PacketDistributor.sendToServer(new SkillSyncPayload(mask));
+        }
+        while (ClientKeys.SKILLS.consumeClick()) {
+            if (mc.screen == null) mc.setScreen(new SkillScreen());
+        }
+
+        // Web XP for swinging around
+        if (isMoving() && !player.onGround()) {
+            Vec3 d = player.getDeltaMovement();
+            xpDistance += Math.sqrt(d.x * d.x + d.z * d.z) + Math.abs(d.y) * 0.3;
+            if (xpDistance >= XP_DISTANCE) {
+                StyleScore.xp(1);
+                xpDistance -= XP_DISTANCE;
+            }
+        }
+        if (player.onGround() || player.isInWater()) glideAirTicks = 0;
+
         handleShootKey(player, usable);
         while (ClientKeys.ZIP.consumeClick()) { if (usable) startZip(player); }
         while (ClientKeys.LAUNCH.consumeClick()) { if (usable) startLaunch(player); }
@@ -202,6 +255,12 @@ public final class SwingClient {
         if (usable && wallRunTicks == 0) tryStartWallRun(player);
         Tricks.tick(player, mc);
         if (usable) checkKick(player);
+        chargedLeap(player, mc, usable);
+        if (slamming) {
+            slamTick(player);
+            prevVel = player.getDeltaMovement();
+            return;
+        }
         if (wallRunTicks > 0) {
             wallRunTick(player, mc, usable);
             prevVel = player.getDeltaMovement();
@@ -228,7 +287,8 @@ public final class SwingClient {
             swing(player, mc);
         } else {
             glide(player);
-            dive(player);
+            webGlide(player, usable);
+            if (!gliding) dive(player);
         }
         prevVel = player.getDeltaMovement();
     }
@@ -282,17 +342,32 @@ public final class SwingClient {
     private static void handleShootKey(Player p, boolean usable) {
         while (ClientKeys.SHOOT.consumeClick()) { } // we watch the key being held instead
         boolean down = ClientKeys.SHOOT.isDown() && usable;
+        boolean g = ClientKeys.TRICK.isDown() && usable;
+        // V + G together: web burst
+        if (down && g) {
+            if (!burstLatch) {
+                burstLatch = true;
+                webBurst(p);
+            }
+            shootHeld = 0;
+            return;
+        }
+        if (!down && !g) burstLatch = false;
+        if (burstLatch) {
+            shootHeld = 0;
+            return;
+        }
         if (down) {
             shootHeld++;
         } else if (shootHeld > 0) {
-            if (shootHeld >= TRAP_CHARGE_TICKS) shootTrap(p);
+            if (shootHeld >= TRAP_CHARGE_TICKS && StyleScore.has(Skill.WEB_TRAP)) shootTrap(p);
             else shootWeb(p);
             shootHeld = 0;
         }
     }
 
     private static void shootTrap(Player p) {
-        if (!canWeb(p, Gear.TRAP_COST)) return;
+        if (!canWeb(p, Gear.trapCost(StyleScore.has(Skill.BIG_TANK)))) return;
         long now = p.level().getGameTime();
         if (!TRAP_BURST.tryUse(now)) {
             playSfx(p, SFX_FAIL, 0.4f, 1.6f);
@@ -318,6 +393,7 @@ public final class SwingClient {
         shotUntil = now + 10;
         playSfx(p, SFX_SHOT, 0.2f, 1.9f);
         playSfx(p, SFX_SPIT, 0.12f, 1.8f);
+        StyleScore.xp(0.5);
         PacketDistributor.sendToServer(new WebShotPayload(false));
     }
 
@@ -327,12 +403,17 @@ public final class SwingClient {
         long now = p.level().getGameTime();
         if (!ZIP_BURST.tryUse(now)) return;
         Tutorial.done(Tutorial.Step.ZIP);
+        StyleScore.xp(1);
         Aim a = aim(p, ZIP_RANGE);
         beginZip(p, a.hit() ? a.point() : p.getEyePosition().add(p.getLookAngle().scale(ZIP_AIR_DISTANCE)), false, null);
     }
 
     /** Point launch: zip to the top edge of the block you're aiming at, then get flung up off it. */
     private static void startLaunch(Player p) {
+        if (!StyleScore.has(Skill.POINT_LAUNCH)) {
+            StyleScore.locked(Skill.POINT_LAUNCH);
+            return;
+        }
         if (!canWeb(p, 0)) return;
         Vec3 eye = p.getEyePosition();
         BlockHitResult hit = p.level().clip(new ClipContext(eye, eye.add(p.getLookAngle().scale(LAUNCH_RANGE)),
@@ -349,7 +430,6 @@ public final class SwingClient {
             top = top.above();
         }
         beginZip(p, Vec3.atBottomCenterOf(top.above()).add(0, 0.5, 0), true, null);
-        Tutorial.done(Tutorial.Step.LAUNCH);
     }
 
     private static void beginZip(Player p, Vec3 target, boolean launch, Entity follow) {
@@ -560,7 +640,10 @@ public final class SwingClient {
 
         // tap sprint (Ctrl) while swinging: second web from the other hand
         boolean sprint = mc.options.keySprint.isDown();
-        if (sprint && !sprintWasDown && !doubleWeb) startDoubleWeb(p, v);
+        if (sprint && !sprintWasDown && !doubleWeb) {
+            if (StyleScore.has(Skill.DOUBLE_WEB)) startDoubleWeb(p, v);
+            else StyleScore.locked(Skill.DOUBLE_WEB);
+        }
         sprintWasDown = sprint;
 
         if (mc.options.keyShift.isDown()) {
@@ -584,7 +667,9 @@ public final class SwingClient {
             v = pump(p, mc, v, dir);
         }
 
-        double max = Config.MAX_SPEED.get() * (doubleWeb ? DOUBLE_SPEED : 1.0);
+        // Swing Speed skills raise your top speed; the max is never above the "Top Speed" setting
+        double cap = Config.MAX_SPEED.get();
+        double max = Math.min(cap, cap * StyleScore.speedFactor() * (doubleWeb ? DOUBLE_SPEED : 1.0));
         double speed = v.length();
         if (speed > max) v = v.scale(max / speed);
 
@@ -613,6 +698,7 @@ public final class SwingClient {
     /** Hit a wall at an angle while going fast: start running along it. */
     private static void tryStartWallRun(Player p) {
         if (!Config.WALL_RUN.get() || !p.horizontalCollision || p.onGround() || p.isInWater()) return;
+        if (!StyleScore.has(Skill.WALL_RUN)) return;
         if (!(anchor != null || zipTarget != null || glideTicks > 0 || diving)) return;
         Vec3 flat = new Vec3(prevVel.x, 0, prevVel.z);
         if (flat.length() < WALL_RUN_MIN_SPEED) return;
@@ -699,6 +785,135 @@ public final class SwingClient {
         }
     }
 
+    // ======== web glide ========
+    /** Hold Space while falling: glide on a web stretched between your arms, up to 10 seconds per jump. */
+    private static void webGlide(Player p, boolean usable) {
+        boolean want = usable && Tricks.spaceHeldTicks() >= Tricks.SPACE_TAP_TICKS && !p.onGround() && !p.isInWater()
+                && !p.isFallFlying() && !p.getAbilities().flying && p.getDeltaMovement().y < 0
+                && glideAirTicks < GLIDE_MAX_TICKS;
+        if (want && !StyleScore.has(Skill.WEB_GLIDE)) {
+            if (!gliding && Tricks.spaceHeldTicks() == Tricks.SPACE_TAP_TICKS) StyleScore.locked(Skill.WEB_GLIDE);
+            want = false;
+        }
+        if (!want) {
+            if (gliding) {
+                gliding = false;
+                Tricks.pose(p, Trick.NONE);
+            }
+            return;
+        }
+        if (!gliding) {
+            gliding = true;
+            Tricks.pose(p, Trick.WEB_GLIDE);
+            StyleScore.trick(Trick.WEB_GLIDE, p.getDeltaMovement().length());
+            startWhoosh(p);
+        }
+        glideAirTicks++;
+        if (glideAirTicks % 60 == 0) StyleScore.xp(1);
+
+        Vec3 v = p.getDeltaMovement();
+        Vec3 look = p.getLookAngle();
+        Vec3 flat = new Vec3(look.x, 0, look.z);
+        flat = flat.lengthSqr() < 1.0E-4 ? Vec3.ZERO : flat.normalize();
+        Vec3 hv = new Vec3(v.x, 0, v.z);
+        double speed = Math.max(GLIDE_SPEED, hv.length() * 0.99);
+        Vec3 want2 = flat.scale(speed);
+        hv = hv.lerp(want2, 0.12).scale(1.0 / AIR_DRAG_XZ);       // steer toward where you look
+        double vy = (-GLIDE_FALL / AIR_DRAG_Y) + GRAVITY;          // sink slowly after gravity is applied
+        if (glideAirTicks > GLIDE_MAX_TICKS - 30) vy -= 0.02 * (glideAirTicks - (GLIDE_MAX_TICKS - 30)) / 30.0; // tiring out
+        p.setDeltaMovement(hv.x, vy, hv.z);
+        p.fallDistance = 0;
+        trail(p);
+    }
+
+    // ======== web slam ========
+    public static void startSlam(Player p) {
+        if (slamming || p.onGround()) return;
+        slamming = true;
+        slamFallStart = p.getY();
+        anchor = null;
+        glideTicks = 0;
+        gliding = false;
+        Tricks.pose(p, Trick.WEB_SLAM);
+        playSfx(p, SFX_LAUNCH, 0.3f, 0.6f);
+        startWhoosh(p);
+        PacketDistributor.sendToServer(new SwingPayload(true)); // no fall damage from the slam
+    }
+
+    private static void slamTick(Player p) {
+        if (p.onGround() || p.isInWater()) {
+            slamming = false;
+            double height = Math.max(0, slamFallStart - p.getY());
+            float power = (float) Math.min(3.0, 0.5 + height / 10.0);
+            PacketDistributor.sendToServer(new SlamPayload(Math.round(power * 100)));
+            PacketDistributor.sendToServer(new SwingPayload(false));
+            Tricks.heroLanding(p);
+            StyleScore.trick(Trick.WEB_SLAM, SLAM_SPEED);
+            StyleScore.bank("Web slam!");
+            return;
+        }
+        p.setDeltaMovement(0, -SLAM_SPEED, 0);
+        p.fallDistance = 0;
+        trail(p);
+    }
+
+    // ======== charged leap ========
+    /** Hold Sneak on the ground to charge, then press Space. */
+    private static void chargedLeap(Player p, Minecraft mc, boolean usable) {
+        boolean jump = mc.options.keyJump.isDown() && usable;
+        boolean jumpPressed = jump && !leapJumpWasDown;
+        leapJumpWasDown = jump;
+
+        if (pendingLeap > 0f) {
+            // vanilla already jumped this tick; now launch for real
+            float f = pendingLeap;
+            pendingLeap = 0f;
+            Vec3 look = p.getLookAngle();
+            Vec3 flat = new Vec3(look.x, 0, look.z);
+            flat = flat.lengthSqr() < 1.0E-4 ? Vec3.ZERO : flat.normalize();
+            p.setDeltaMovement(flat.x * 0.55 * f, 0.7 + 1.0 * f, flat.z * 0.55 * f);
+            glideTotal = Config.ticks(Config.GLIDE_SECONDS);
+            glideTicks = glideTotal;
+            playSfx(p, SFX_LAUNCH, 0.4f, 0.9f);
+            StyleScore.trick(Trick.CHARGED_LEAP, p.getDeltaMovement().length());
+            PacketDistributor.sendToServer(new SwingPayload(true)); // short fall-damage grace
+            PacketDistributor.sendToServer(new SwingPayload(false));
+            return;
+        }
+
+        Vec3 d = p.getDeltaMovement();
+        boolean charging = usable && p.onGround() && p.isShiftKeyDown() && d.x * d.x + d.z * d.z < 0.01
+                && StyleScore.has(Skill.CHARGED_LEAP);
+        if (charging) {
+            if (leapCharge < LEAP_MAX_CHARGE) leapCharge++;
+            if (jumpPressed && leapCharge >= LEAP_MIN_CHARGE) {
+                pendingLeap = leapCharge / (float) LEAP_MAX_CHARGE;
+                leapCharge = 0;
+            }
+        } else {
+            leapCharge = 0;
+        }
+    }
+
+    // ======== web burst ========
+    private static void webBurst(Player p) {
+        if (!StyleScore.has(Skill.WEB_BURST)) {
+            StyleScore.locked(Skill.WEB_BURST);
+            return;
+        }
+        if (!canWeb(p, Gear.burstCost(StyleScore.has(Skill.BIG_TANK)))) return;
+        long now = p.level().getGameTime();
+        if (!WEB_BURST_COOLDOWN.tryUse(now)) {
+            playSfx(p, SFX_FAIL, 0.4f, 1.6f);
+            return;
+        }
+        burstTime = now;
+        playSfx(p, SFX_SHOT, 0.5f, 0.8f);
+        playSfx(p, SFX_SPIT, 0.4f, 0.9f);
+        StyleScore.trick(Trick.WEB_BURST, p.getDeltaMovement().length());
+        PacketDistributor.sendToServer(new BurstPayload(0));
+    }
+
     /** Dive boost: look down while falling to speed up. Grab a web to pull out of it. */
     private static void dive(Player p) {
         boolean was = diving;
@@ -717,6 +932,10 @@ public final class SwingClient {
 
     /** Web pull: small mobs get yanked to you; big mobs and players (or if you're sneaking) pull you to them. */
     private static void webPull(Player p) {
+        if (!StyleScore.has(Skill.WEB_PULL)) {
+            StyleScore.locked(Skill.WEB_PULL);
+            return;
+        }
         if (!canWeb(p, Gear.PULL_COST)) return;
         long now = p.level().getGameTime();
         LivingEntity e = aimEntity(p, PULL_RANGE);
@@ -741,6 +960,7 @@ public final class SwingClient {
 
     /** Swing kick: hit a mob while going fast. */
     private static void checkKick(Player p) {
+        if (!StyleScore.has(Skill.SWING_KICK)) return;
         if (!(anchor != null || zipTarget != null || glideTicks > 0 || diving)) return;
         Vec3 v = p.getDeltaMovement();
         double speed = v.length();
@@ -922,6 +1142,48 @@ public final class SwingClient {
         curAlpha = 255;
     }
 
+    /** Web burst: strands shooting out in every direction. */
+    private static void drawBurst(PoseStack.Pose pose, VertexConsumer vc, Player p, long now, float pt) {
+        float age = now - burstTime + pt;
+        float grow = Math.min(1f, age / 3f);
+        curAlpha = (int) Mth.clamp(255f * (10f - age) / 4f, 0f, 255f);
+        Vec3 c = p.getPosition(pt).add(0, p.getBbHeight() * 0.6, 0);
+        int n = 16;
+        for (int i = 0; i < n; i++) {
+            double ang = 2.0 * Math.PI * i / n;
+            double up = (i % 3 - 1) * 0.35;
+            Vec3 d = new Vec3(Math.cos(ang), up, Math.sin(ang)).normalize().scale(BURST_RANGE * grow);
+            seg(pose, vc, c, c.add(d), 255, 255, 255);
+        }
+        curAlpha = 255;
+    }
+
+    private static boolean anyGliders() {
+        for (AnimState s : AnimState.all().values()) if (s.trick == Trick.WEB_GLIDE) return true;
+        return false;
+    }
+
+    /** Web glide: web stretched between arms and legs. */
+    private static void drawGliders(PoseStack.Pose pose, VertexConsumer vc, Player me, float pt) {
+        for (Map.Entry<Integer, AnimState> e : AnimState.all().entrySet()) {
+            if (e.getValue().trick != Trick.WEB_GLIDE) continue;
+            if (!(me.level().getEntity(e.getKey()) instanceof Player pl)) continue;
+            double yaw = Math.toRadians(Mth.rotLerp(pt, pl.yBodyRotO, pl.yBodyRot));
+            Vec3 fwd = new Vec3(-Math.sin(yaw), 0, Math.cos(yaw));
+            Vec3 right = new Vec3(-Math.cos(yaw), 0, -Math.sin(yaw));
+            Vec3 c = pl.getPosition(pt).add(0, pl.getBbHeight() * 0.5, 0);
+            for (int sgn = -1; sgn <= 1; sgn += 2) {
+                Vec3 handPt = c.add(right.scale(0.95 * sgn)).add(fwd.scale(0.35));
+                Vec3 footPt = c.add(right.scale(0.35 * sgn)).add(fwd.scale(-0.95));
+                Vec3 hip = c.add(right.scale(0.2 * sgn)).add(fwd.scale(-0.2));
+                seg(pose, vc, handPt, footPt, 245, 245, 250);
+                seg(pose, vc, handPt, hip, 220, 228, 238);
+                seg(pose, vc, hip, footPt, 220, 228, 238);
+                seg(pose, vc, handPt.lerp(footPt, 0.5), hip, 220, 228, 238);
+            }
+        }
+    }
+
     /** Web wrapped around cocooned mobs, hanging from a strand. */
     private static void drawCocoons(PoseStack.Pose pose, VertexConsumer vc, Player me, float pt) {
         for (Integer id : CocoonClient.all().keySet()) {
@@ -1000,7 +1262,10 @@ public final class SwingClient {
         if (!loose) looseFrom = null;
         boolean others = othersVisible(p, now);
         boolean cocoons = CocoonClient.any(now);
-        if (anchor == null && zipTarget == null && !shot && !loose && !others && !pulling && !cocoons) return;
+        boolean bursting = now - burstTime < 10;
+        boolean gliders = anyGliders();
+        if (anchor == null && zipTarget == null && !shot && !loose && !others && !pulling && !cocoons
+                && !bursting && !gliders) return;
 
         float pt = event.getPartialTick().getGameTimeDeltaPartialTick(true);
         float time = now + pt;
@@ -1054,6 +1319,8 @@ public final class SwingClient {
         }
         if (others) drawOthers(pose, vc, p, now, pt, time);
         if (cocoons) drawCocoons(pose, vc, p, pt);
+        if (bursting) drawBurst(pose, vc, p, now, pt);
+        if (gliders) drawGliders(pose, vc, p, pt);
 
         ps.popPose();
         buffers.endBatch(RenderType.lines());

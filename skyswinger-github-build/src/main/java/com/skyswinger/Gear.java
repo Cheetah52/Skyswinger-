@@ -10,7 +10,22 @@ import net.minecraft.world.item.ItemStack;
  * Creative: no Web Shooter or fluid needed.
  */
 public final class Gear {
-    public static final int SHOT_COST = 1, TRAP_COST = 4, PULL_COST = 1;
+    public static final int SHOT_COST = 1, PULL_COST = 1;
+
+    /** Web trap fluid (half with Bigger Web Tank). */
+    public static int trapCost(boolean bigTank) {
+        return bigTank ? 2 : 4;
+    }
+
+    /** Web burst fluid (half with Bigger Web Tank). */
+    public static int burstCost(boolean bigTank) {
+        return bigTank ? 3 : 6;
+    }
+
+    /** Cooldown length with Quick Reload (40% shorter). */
+    public static int cooldown(int ticks, boolean quick) {
+        return quick ? Math.round(ticks * 0.6f) : ticks;
+    }
 
     public static boolean needsShooter(Player p) {
         return Config.REQUIRE_SHOOTER.get() && !p.isCreative() && !p.isSpectator();

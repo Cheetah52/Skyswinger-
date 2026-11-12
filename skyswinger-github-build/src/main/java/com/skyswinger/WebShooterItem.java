@@ -37,7 +37,8 @@ public class WebShooterItem extends Item {
             if (!c.is(ModItems.WEB_CARTRIDGE.get())) continue;
             if (!level.isClientSide()) {
                 if (!player.isCreative()) c.shrink(1);
-                stack.setDamageValue(Math.max(0, stack.getDamageValue() - REFILL));
+                int refill = SkillServer.has(player, Skill.BIG_TANK) ? REFILL * 2 : REFILL;
+                stack.setDamageValue(Math.max(0, stack.getDamageValue() - refill));
                 level.playSound(null, player.getX(), player.getY(), player.getZ(),
                         SoundEvents.BOTTLE_FILL, SoundSource.PLAYERS, 0.7f, 1.4f);
             }

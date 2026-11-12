@@ -50,14 +50,17 @@ public final class WebShotServer {
         if (!(player.level() instanceof ServerLevel level)) return;
         long now = level.getGameTime();
         if (!Gear.hasShooter(player)) return;
-        int cost = charged ? Gear.TRAP_COST : Gear.SHOT_COST;
+        if (charged && !SkillServer.has(player, Skill.WEB_TRAP)) charged = false; // not unlocked: normal shot
+        boolean quick = SkillServer.has(player, Skill.QUICK_RELOAD);
+        int cost = charged ? Gear.trapCost(SkillServer.has(player, Skill.BIG_TANK)) : Gear.SHOT_COST;
         if (!Gear.hasFluid(player, cost)) return;
         if (charged) {
             Burst trap = TRAPS.computeIfAbsent(player.getUUID(), k -> new Burst(1, TRAP_COOLDOWN, 0));
+            trap.configure(1, Gear.cooldown(TRAP_COOLDOWN, quick));
             if (!trap.tryUse(now)) return;
         } else {
             Burst burst = BURSTS.computeIfAbsent(player.getUUID(), k -> new Burst(maxShots(), cooldownTicks(), MIN_GAP));
-            burst.configure(maxShots(), cooldownTicks());
+            burst.configure(maxShots(), Gear.cooldown(cooldownTicks(), quick));
             if (!burst.tryUse(now)) return;
         }
 
@@ -78,7 +81,8 @@ public final class WebShotServer {
 
         if (hit != null && eye.distanceToSqr(hit.getLocation()) <= maxSq) {
             LivingEntity target = (LivingEntity) hit.getEntity();
-            if (charged && CocoonServer.isTrapped(target) && !(target instanceof Player)) {
+            if (charged && CocoonServer.isTrapped(target) && !(target instanceof Player)
+                    && SkillServer.has(player, Skill.WEB_COCOON)) {
                 // trapped twice: wrap it up and hang it upside down
                 CocoonServer.cocoon(level, player, target);
                 effects(level, target.getX(), target.getY(0.5), target.getZ());
@@ -115,7 +119,7 @@ public final class WebShotServer {
         }
     }
 
-    private static void spawnWeb(ServerLevel level, Player shooter, BlockPos pos) {
+    static void spawnWeb(ServerLevel level, Player shooter, BlockPos pos) {
         if (!shooter.mayBuild()) return;
         BlockPos me = shooter.blockPosition();
         if (pos.equals(me) || pos.equals(me.above())) return;

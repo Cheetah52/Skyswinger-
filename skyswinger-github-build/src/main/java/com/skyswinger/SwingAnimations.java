@@ -23,7 +23,7 @@ import org.joml.Quaternionf;
  */
 @EventBusSubscriber(modid = SkySwinger.MODID, value = Dist.CLIENT)
 public final class SwingAnimations {
-    public enum Kind { NONE, SWING, ZIP, TRICK, ROLL, SWAN, DIVE, KICK, WALLRUN, PERCH, HERO, FALL, GLIDE }
+    public enum Kind { NONE, SWING, ZIP, TRICK, ROLL, SWAN, DIVE, KICK, WALLRUN, PERCH, HERO, WEBGLIDE, SLAM, FALL, GLIDE }
 
     private static final double MAX_LEAN = Math.toRadians(75);
     private static final double MAX_DIVE_LEAN = Math.toRadians(165); // head-first dives can tip almost upside down
@@ -38,6 +38,8 @@ public final class SwingAnimations {
         if (s == null || !Config.ANIMATIONS.get()) return Kind.NONE;
         if (s.trick == Trick.SWING_KICK && s.inTrick(p.tickCount)) return Kind.KICK;
         if (s.trick == Trick.WALL_RUN) return Kind.WALLRUN;
+        if (s.trick == Trick.WEB_GLIDE) return Kind.WEBGLIDE;
+        if (s.trick == Trick.WEB_SLAM) return Kind.SLAM;
         if (s.trick == Trick.HERO_LANDING && s.inTrick(p.tickCount)) return Kind.HERO;
         if (s.trick == Trick.PERCH && p.onGround()) return Kind.PERCH;
         if (s.swinging()) return Kind.SWING;
@@ -102,6 +104,8 @@ public final class SwingAnimations {
                 if (s.trickData.lengthSqr() > 1.0E-4) target = s.trickData.scale(0.75).add(0, 0.65, 0).normalize();
             }
             case PERCH -> target = UP.lerp(fwd, 0.3).normalize();
+            case WEBGLIDE -> target = fwd.scale(0.95).add(0, 0.3, 0).normalize(); // belly down, spread out
+            case SLAM -> target = UP;
             case HERO -> target = UP.lerp(fwd, 0.35).normalize();
             case FALL -> target = fwd.scale(0.9).add(0, 0.25, 0).normalize();    // belly-down skydive
             case GLIDE -> {
@@ -206,6 +210,20 @@ public final class SwingAnimations {
                 // legs keep their running motion; arms out for balance
                 set(m.rightArm, -0.4f + wob, 0f, 0.9f);
                 set(m.leftArm, -0.4f - wob, 0f, -0.9f);
+            }
+            case WEBGLIDE -> {
+                // arms and legs spread wide to stretch the web
+                set(m.rightArm, -0.25f, 0f, 1.55f + wob * 0.5f);
+                set(m.leftArm, -0.25f, 0f, -1.55f - wob * 0.5f);
+                set(m.rightLeg, 0.1f, 0f, 0.45f);
+                set(m.leftLeg, 0.1f, 0f, -0.45f);
+            }
+            case SLAM -> {
+                // fists raised over your head, knees up, coming down hard
+                set(m.rightArm, -PI + 0.35f, 0f, 0.35f);
+                set(m.leftArm, -PI + 0.35f, 0f, -0.35f);
+                set(m.rightLeg, -0.7f, 0f, 0.1f);
+                set(m.leftLeg, -0.5f, 0f, -0.1f);
             }
             case PERCH -> {
                 // crouched at the edge, forearms resting on knees, looking out

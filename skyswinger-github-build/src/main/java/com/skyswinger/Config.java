@@ -21,6 +21,7 @@ public final class Config {
     public static final ModConfigSpec.DoubleValue KICK_DAMAGE, TRAP_SECONDS;
     public static final ModConfigSpec.BooleanValue SMART_ANCHORS, WALL_RUN, DANGER_SENSE, CAMERA_TILT, WIND, SHOW_TUTORIAL;
     public static final ModConfigSpec.BooleanValue REQUIRE_SHOOTER, CARTRIDGES;
+    public static final ModConfigSpec.BooleanValue UNLOCK_ALL;
     public static final ModConfigSpec.DoubleValue FALL_REDUCTION;
     public static final ModConfigSpec.DoubleValue RELEASE_BOOST, GLIDE_SECONDS, GLIDE_KEEP;
     public static final ModConfigSpec.DoubleValue ZIP_SPEED, ZIP_COOLDOWN;
@@ -57,8 +58,10 @@ public final class Config {
 
         b.push("tricks");
         RELEASE_FLIPS = b.comment("Do a flip automatically when you let go at high speed").define("releaseFlips", true);
-        SHOW_SCORE = b.comment("Show trick points, combos and level-ups").define("showScore", true);
-        SPACE_FLIPS = b.comment("Space in the air does a front flip (S + Space = backflip)").define("spaceFlips", true);
+        SHOW_SCORE = b.comment("Show praise words, landings and level-ups").define("showScore", true);
+        SPACE_FLIPS = b.comment("Tap Space in the air for a front flip (S + Space = backflip)").define("spaceFlips", true);
+        UNLOCK_ALL = b.comment("Unlock every skill (for testing). Creative mode always has everything.")
+                .define("unlockAllSkills", false);
         b.pop();
 
         b.push("momentum");

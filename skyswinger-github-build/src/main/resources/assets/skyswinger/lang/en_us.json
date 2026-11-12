@@ -60,8 +60,8 @@
   "skyswinger.configuration.tricks": "Tricks",
   "skyswinger.configuration.releaseFlips": "Release Flips",
   "skyswinger.configuration.releaseFlips.tooltip": "Do a flip automatically when you let go at high speed.",
-  "skyswinger.configuration.showScore": "Show Points",
-  "skyswinger.configuration.showScore.tooltip": "Show trick points, combos and level-ups.",
+  "skyswinger.configuration.showScore": "Show Praise",
+  "skyswinger.configuration.showScore.tooltip": "Show praise words, landings and level-ups.",
   "skyswinger.configuration.hudScale": "Display Size",
   "skyswinger.configuration.hudScale.tooltip": "Size of the corner display.",
   "key.skyswinger.launch": "Point Launch",
@@ -69,7 +69,7 @@
   "skyswinger.configuration.diveBoost": "Dive Boost",
   "skyswinger.configuration.diveBoost.tooltip": "Look straight down while falling to dive faster.",
   "skyswinger.configuration.spaceFlips": "Space Flips",
-  "skyswinger.configuration.spaceFlips.tooltip": "Space in the air does a front flip. S + Space does a backflip.",
+  "skyswinger.configuration.spaceFlips.tooltip": "Tap Space in the air for a front flip. S + Space does a backflip.",
   "skyswinger.configuration.trapSeconds": "Trap Time",
   "skyswinger.configuration.trapSeconds.tooltip": "How many seconds a web trap holds a mob.",
   "skyswinger.configuration.combat": "Combat",
@@ -95,5 +95,8 @@
   "skyswinger.configuration.useWebFluid": "Use Web Fluid",
   "skyswinger.configuration.useWebFluid.tooltip": "Web shots use web fluid. Refill with Web Cartridges.",
   "skyswinger.configuration.fallDamageReduction": "Fall Damage Reduction",
-  "skyswinger.configuration.fallDamageReduction.tooltip": "How much less fall damage you take with a Web Shooter. 0.75 means 75% less."
+  "skyswinger.configuration.fallDamageReduction.tooltip": "How much less fall damage you take with a Web Shooter. 0.75 means 75% less.",
+  "key.skyswinger.skills": "Abilities / Skill Tree",
+  "skyswinger.configuration.unlockAllSkills": "Unlock All Skills",
+  "skyswinger.configuration.unlockAllSkills.tooltip": "Unlock every skill for testing. Creative mode always has everything."
 }

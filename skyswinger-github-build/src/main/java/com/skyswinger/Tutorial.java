@@ -13,9 +13,9 @@ public final class Tutorial {
         RELEASE("Let go of %s to fly off the web"),
         FLIP("Press %s in the air to do a flip"),
         ZIP("Press %s to zip to where you're looking"),
-        LAUNCH("Aim at a wall and press %s to point launch off the top"),
-        SHOOT("Tap %s to shoot a web. Hold it, then let go, for a web trap"),
-        BANK("Land on your feet to bank your style points!");
+        SHOOT("Tap %s to shoot a web"),
+        BANK("Do a few tricks, then land on your feet!"),
+        SKILLS("Earn Web XP by using your powers. Press %s for the skill tree");
 
         final String text;
 
@@ -74,9 +74,9 @@ public final class Tutorial {
             case PUMP -> mc.options.keyUp;
             case FLIP -> mc.options.keyJump;
             case ZIP -> ClientKeys.ZIP;
-            case LAUNCH -> ClientKeys.LAUNCH;
             case SHOOT -> ClientKeys.SHOOT;
             case BANK -> null;
+            case SKILLS -> ClientKeys.SKILLS;
         };
         return k == null ? "" : "[" + k.getTranslatedKeyMessage().getString() + "]";
     }

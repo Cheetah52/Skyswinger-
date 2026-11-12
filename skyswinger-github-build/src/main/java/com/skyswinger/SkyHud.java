@@ -64,6 +64,7 @@ public final class SkyHud {
 
         if (Config.SHOW_SCORE.get()) drawScore(g, mc.font, now);
         drawTrapCharge(g, mc.font, now);
+        drawLeapCharge(g, mc.font);
         if (!Config.SHOW_HUD.get()) {
             alpha = 0;
             return;
@@ -71,7 +72,8 @@ public final class SkyHud {
 
         Burst web = SwingClient.WEB_BURST, zip = SwingClient.ZIP_BURST;
         boolean moving = SwingClient.isMoving();
-        boolean show = moving || StyleScore.comboActive() || notFull(web, now) || notFull(zip, now);
+        boolean show = moving || StyleScore.comboActive() || notFull(web, now) || notFull(zip, now)
+                || StyleScore.points() > 0;
 
         // smooth fade in / out
         alpha = show ? Math.min(1f, alpha + dt * 6f) : Math.max(0f, alpha - dt * 3f);
@@ -117,7 +119,14 @@ public final class SkyHud {
     // ======== corner panel ========
     private static void levelRow(GuiGraphics g, Font font, int x, int y) {
         g.drawString(font, "Lv" + StyleScore.level(), x + PAD, y, col(1f, StyleScore.GOLD), true);
-        int bx = x + PAD + LABEL_W, bw = x + W - PAD - bx;
+        int pts = StyleScore.points();
+        int right = x + W - PAD;
+        if (pts > 0) {
+            String t = "+" + pts;
+            g.drawString(font, t, right - font.width(t), y, col(1f, StyleScore.GOLD), true);
+            right -= font.width(t) + 2;
+        }
+        int bx = x + PAD + LABEL_W, bw = right - bx;
         g.fill(bx, y + 3, bx + bw, y + 5, col(0.4f, 0x000000));
         g.fill(bx, y + 3, bx + Math.round(bw * StyleScore.levelProgress()), y + 5, col(1f, StyleScore.GOLD));
     }
@@ -202,26 +211,28 @@ public final class SkyHud {
         g.fill(bx, y + 3, bx + Math.round(bw * f), y + 5, col(1f, f > 0.8f ? StyleScore.GOLD : ACCENT));
     }
 
-    // ======== score, combo and pop-ups ========
+    // ======== praise words, landings and level-ups ========
     private static void drawScore(GuiGraphics g, Font font, long now) {
         int cx = g.guiWidth() / 2, cy = g.guiHeight() / 2;
-        int sx = cx + 22;
+        int sx = cx + 26;
 
-        if (StyleScore.comboActive()) {
-            String line = StyleScore.fmt(StyleScore.comboPoints()) + "  x" + String.format("%.2f", StyleScore.multiplier());
-            g.drawString(font, line, sx, cy - 14, 0xFF000000 | StyleScore.GOLD, true);
-        }
-
-        int py = cy - 3;
-        for (StyleScore.Popup pu : StyleScore.popups()) {
+        // newest praise word, big, with the move's name under it
+        StyleScore.Popup pu = StyleScore.popups().peekFirst();
+        if (pu != null) {
             long age = now - pu.time();
-            if (age < 0 || age > POPUP_TICKS) continue;
-            float a = 1f - age / (float) POPUP_TICKS;
-            if (a < 0.05f) continue;
-            g.drawString(font, pu.text(), sx, py, argb(a, pu.color()), true);
-            py += 10;
+            if (age >= 0 && age < POPUP_TICKS) {
+                float a = Math.min(1f, (POPUP_TICKS - age) / 12f);
+                float pop = age < 4 ? 2.1f - 0.125f * age : 1.6f; // pops in, then settles
+                g.pose().pushPose();
+                g.pose().translate(sx, cy - 18, 0);
+                g.pose().scale(pop, pop, 1f);
+                g.drawString(font, pu.text(), 0, 0, argb(a, pu.color()), true);
+                g.pose().popPose();
+                if (pu.sub() != null) g.drawString(font, pu.sub(), sx, cy - 3, argb(a * 0.85f, StyleScore.GRAY), true);
+            }
         }
 
+        // how you landed (or Wipeout!)
         StyleScore.Popup b = StyleScore.banner();
         if (b != null) {
             long age = now - b.time();
@@ -231,20 +242,33 @@ public final class SkyHud {
             }
         }
 
+        // level up
         StyleScore.Popup lv = StyleScore.levelBanner();
         if (lv != null) {
             long age = now - lv.time();
             if (age >= 0 && age < LEVEL_TICKS) {
                 float a = Math.min(1f, (LEVEL_TICKS - age) / 20f);
-                if (a > 0.05f) g.drawCenteredString(font, lv.text(), cx, 32, argb(a, lv.color()));
+                if (a > 0.05f) {
+                    g.pose().pushPose();
+                    g.pose().translate(cx, 34, 0);
+                    g.pose().scale(1.5f, 1.5f, 1f);
+                    g.drawCenteredString(font, lv.text(), 0, 0, argb(a, lv.color()));
+                    g.pose().popPose();
+                    if (lv.sub() != null) g.drawCenteredString(font, lv.sub(), cx, 50, argb(a, 0xFFFFFF));
+                }
             }
         }
+    }
 
-        // best combo, shown with the corner panel
-        if (alpha > 0.05f && StyleScore.best() > 0 && StyleScore.comboActive()) {
-            String best = "Best " + StyleScore.fmt(StyleScore.best());
-            g.drawString(font, best, sx, cy - 24, argb(0.7f, StyleScore.GRAY), true);
-        }
+    /** Charged leap bar under the crosshair while you hold Sneak. */
+    private static void drawLeapCharge(GuiGraphics g, Font font) {
+        float c = SwingClient.leapCharge();
+        if (c <= 0f) return;
+        int cx = g.guiWidth() / 2, cy = g.guiHeight() / 2 + 9;
+        int w = 26;
+        g.fill(cx - w / 2, cy, cx + w / 2, cy + 3, 0x88000000);
+        g.fill(cx - w / 2, cy, cx - w / 2 + Math.round(w * c), cy + 3, 0xFF000000 | (c >= 1f ? StyleScore.GOLD : 0x9FE0FF));
+        if (c >= 1f) g.drawCenteredString(font, "LEAP", cx, cy + 5, 0xFF000000 | StyleScore.GOLD);
     }
 
     /** Small charge bar under the crosshair while you hold V. */

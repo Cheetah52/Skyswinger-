@@ -5,11 +5,9 @@ import java.io.Writer;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayDeque;
-import java.util.ArrayList;
 import java.util.Deque;
+import java.util.EnumSet;
 import java.util.HashMap;
-import java.util.LinkedHashSet;
-import java.util.List;
 import java.util.Map;
 import java.util.Properties;
 import java.util.Set;
@@ -19,140 +17,204 @@ import net.minecraft.sounds.SoundEvents;
 import net.neoforged.fml.loading.FMLPaths;
 
 /**
- * Style points.
- * - Tricks earn points (harder tricks earn more, going fast adds up to +50%).
- * - Repeating a trick in the same combo earns half as much each time, so mix them up.
- * - Each trick and each new web while in the air raises your multiplier (up to x5).
- * - Land cleanly (or roll) to BANK the combo. Landing mid-trick, hitting a wall or getting hurt LOSES it.
- * - Banked points raise your Style Level, which unlocks harder tricks. Your best combo is your score to beat.
+ * Style and progress (client side).
+ * - Tricks pop praise words that grow with your combo: Nice! Great! Awesome! Amazing! Spectacular! Unstoppable!
+ * - Everything you do with your powers earns Web XP. Levels give skill points for the skill tree (press K).
+ * - Mixing tricks up is worth more than repeating one.
  */
 public final class StyleScore {
-    public static final int MAX_LEVEL = 10;
-    private static final long[] LEVEL_XP = {0, 1000, 3000, 6000, 10000, 15000, 21000, 28000, 36000, 45000};
-    private static final int SWING_POINTS = 10;
-    private static final double MAX_MULT = 5.0;
-
+    public static final int MAX_LEVEL = 20;
     public static final int WHITE = 0xFFFFFF, GOLD = 0xFFD36A, GREEN = 0x7CFF8A, RED = 0xFF6A5A, GRAY = 0xB0B8C0;
 
-    public record Popup(String text, int color, long time) {}
+    private static final String[] WORDS = {"Nice!", "Great!", "Awesome!", "Amazing!", "Spectacular!", "Unstoppable!"};
+    private static final int[] WORD_COLORS = {0xFFFFFF, 0x9FE0FF, 0x7CFF8A, 0xFFD36A, 0xFF9A50, 0xFF6AD5};
+    private static final int[] TIERS = {1, 3, 5, 8, 12, 17};
+    private static final int[] TIERS_MASTER = {1, 2, 4, 6, 9, 13};
 
+    /** A word or message on screen. size: 0 = small, 1 = big. */
+    public record Popup(String text, String sub, int color, long time, int size) {}
+
+    // saved progress
     private static boolean loaded;
-    private static long total, best;
+    private static double xp;
     private static int tutorial;
+    private static final Set<Skill> UNLOCKED = EnumSet.noneOf(Skill.class);
 
+    // current combo
     private static boolean active;
-    private static double points;
     private static int chain;
     private static final Map<String, Integer> USED = new HashMap<>();
 
     private static final Deque<Popup> POPUPS = new ArrayDeque<>();
     private static Popup banner, levelBanner;
 
-    // ======== reading ========
-    public static boolean comboActive() { return active; }
-    public static long comboPoints() { return Math.round(points); }
-    public static double multiplier() { return Math.min(MAX_MULT, 1.0 + 0.25 * chain); }
-    public static long total() { load(); return total; }
-    public static long best() { load(); return best; }
-    public static int tutorialStep() { load(); return tutorial; }
-    public static void setTutorialStep(int step) { load(); tutorial = step; save(); }
-    public static Deque<Popup> popups() { return POPUPS; }
-    public static Popup banner() { return banner; }
-    public static Popup levelBanner() { return levelBanner; }
+    // ======== levels ========
+    /** Web XP needed to go from level n to n+1. Early levels are quick, later ones take longer. */
+    public static int xpForLevel(int n) {
+        return 150 + 70 * (n - 1);
+    }
 
     public static int level() {
         load();
+        double left = xp;
         int lvl = 1;
-        for (int i = 0; i < LEVEL_XP.length; i++) if (total >= LEVEL_XP[i]) lvl = i + 1;
-        return Math.min(lvl, MAX_LEVEL);
+        while (lvl < MAX_LEVEL && left >= xpForLevel(lvl)) {
+            left -= xpForLevel(lvl);
+            lvl++;
+        }
+        return lvl;
     }
 
-    /** 0..1 progress toward the next level. */
+    /** 0..1 toward the next level. */
     public static float levelProgress() {
-        int lvl = level();
-        if (lvl >= MAX_LEVEL) return 1f;
-        long from = LEVEL_XP[lvl - 1], to = LEVEL_XP[lvl];
-        return (float) (total - from) / (float) (to - from);
+        load();
+        double left = xp;
+        int lvl = 1;
+        while (lvl < MAX_LEVEL && left >= xpForLevel(lvl)) {
+            left -= xpForLevel(lvl);
+            lvl++;
+        }
+        return lvl >= MAX_LEVEL ? 1f : (float) (left / xpForLevel(lvl));
     }
 
-    // ======== scoring ========
+    // ======== skills ========
+    public static boolean unlockAll() {
+        Minecraft mc = Minecraft.getInstance();
+        return Config.UNLOCK_ALL.get() || (mc.player != null && mc.player.isCreative());
+    }
+
+    public static boolean has(Skill s) {
+        load();
+        return unlockAll() || UNLOCKED.contains(s);
+    }
+
+    public static boolean owned(Skill s) {
+        load();
+        return UNLOCKED.contains(s);
+    }
+
+    public static int points() {
+        load();
+        return Math.max(0, (level() - 1) - UNLOCKED.size());
+    }
+
+    public static boolean canUnlock(Skill s) {
+        return !owned(s) && points() > 0 && (s.parent == null || owned(s.parent));
+    }
+
+    public static boolean unlock(Skill s) {
+        if (!canUnlock(s)) return false;
+        UNLOCKED.add(s);
+        save();
+        return true;
+    }
+
+    /** Skills the server should know about (all of them in creative). */
+    public static int mask() {
+        if (unlockAll()) return Skill.allBits();
+        load();
+        int m = 0;
+        for (Skill s : UNLOCKED) m |= s.bit();
+        return m;
+    }
+
+    /** Top swing speed: 75% to start, 87.5% with Swing Speed I, 100% with Swing Speed II. */
+    public static double speedFactor() {
+        if (has(Skill.SWING_SPEED_2)) return 1.0;
+        if (has(Skill.SWING_SPEED_1)) return 0.875;
+        return 0.75;
+    }
+
+    // ======== earning ========
+    /** Add Web XP. */
+    public static void xp(double amount) {
+        if (amount <= 0) return;
+        load();
+        int before = level();
+        xp += amount;
+        int after = level();
+        if (after > before) {
+            levelBanner = new Popup("Level " + after + "!", "You got a skill point. Press "
+                    + ClientKeys.SKILLS.getTranslatedKeyMessage().getString() + " to spend it", GOLD, now(), 1);
+            Minecraft mc = Minecraft.getInstance();
+            if (mc.player != null) mc.player.playSound(SoundEvents.PLAYER_LEVELUP, 0.6f, 1.2f);
+        }
+        dirty++;
+        if (after > before || dirty >= 20) save();
+    }
+
+    private static int dirty;
+
     /** A new web while in the air keeps the combo going. */
     public static void swing() {
         active = true;
-        points += SWING_POINTS;
         chain += 1;
     }
 
+    /** A trick or special move: praise word + Web XP. */
     public static void trick(Trick t, double speed) {
         if (t == Trick.NONE) return;
         int n = USED.getOrDefault(t.title, 0);
         USED.put(t.title, n + 1);
         double variety = Math.pow(0.5, n);
-        double speedBonus = 1.0 + 0.5 * Math.min(1.0, speed / Config.MAX_SPEED.get());
-        int pts = (int) Math.round(t.points * variety * speedBonus);
+        double master = has(Skill.STYLE_MASTER) ? 1.5 : 1.0;
+        xp(t.points / 25.0 * variety * master);
+
         active = true;
-        points += pts;
-        chain += 2;
-        popup("+" + pts + " " + t.title + (n > 0 ? " (repeat)" : ""), n > 0 ? GRAY : WHITE);
+        chain += n == 0 ? 2 : 1; // new tricks build praise faster than repeats
+        int tier = tier();
+        POPUPS.addFirst(new Popup(WORDS[tier], t.title, WORD_COLORS[tier], now(), 1));
+        while (POPUPS.size() > 3) POPUPS.removeLast();
     }
 
-    /** Lock in the combo. */
-    public static void bank() {
+    private static int tier() {
+        int[] tiers = has(Skill.STYLE_MASTER) ? TIERS_MASTER : TIERS;
+        int tier = 0;
+        for (int i = 0; i < tiers.length; i++) if (chain >= tiers[i] * 2) tier = i;
+        return tier;
+    }
+
+    /** Landed cleanly: show how you landed and give a little bonus XP for the combo. */
+    public static void bank(String landing) {
         if (!active) return;
-        if (points > 0) Tutorial.done(Tutorial.Step.BANK);
-        load();
-        long gained = Math.round(points * multiplier());
-        int oldLevel = level();
-        total += gained;
-        boolean newBest = gained > best;
-        if (newBest) best = gained;
-        if (gained >= 25) {
-            banner = new Popup("+" + fmt(gained) + (newBest ? "   New best!" : ""), newBest ? GOLD : GREEN, now());
-        }
-        int lvl = level();
-        if (lvl > oldLevel) {
-            levelBanner = new Popup("Style Level " + lvl + unlocks(lvl), GOLD, now());
-            Minecraft mc = Minecraft.getInstance();
-            if (mc.player != null) mc.player.playSound(SoundEvents.PLAYER_LEVELUP, 0.6f, 1.2f);
+        if (chain >= 2) {
+            Tutorial.done(Tutorial.Step.BANK);
+            banner = new Popup(landing, null, GREEN, now(), 0);
+            xp(Math.min(30, chain * 0.5));
         }
         reset();
-        save();
     }
 
     /** Lose the combo. */
-    public static void crash(String message) {
+    public static void crash() {
         if (!active) return;
-        banner = new Popup(message, RED, now());
+        banner = new Popup("Wipeout!", null, RED, now(), 0);
         reset();
     }
 
-    public static void locked(Trick t) {
-        popup(t.title + " unlocks at Style Level " + t.level, GRAY);
+    /** Tried something that isn't unlocked yet. */
+    public static void locked(Skill s) {
+        hint(s.title + " isn't unlocked yet. Press " + ClientKeys.SKILLS.getTranslatedKeyMessage().getString()
+                + " for the skill tree");
     }
 
-    // ======== helpers ========
+    public static void hint(String text) {
+        Tutorial.hint(text);
+    }
+
+    // ======== reading (HUD) ========
+    public static boolean comboActive() { return active; }
+    public static Deque<Popup> popups() { return POPUPS; }
+    public static Popup banner() { return banner; }
+    public static Popup levelBanner() { return levelBanner; }
+
+    public static int tutorialStep() { load(); return tutorial; }
+    public static void setTutorialStep(int step) { load(); tutorial = step; save(); }
+
     private static void reset() {
         active = false;
-        points = 0;
         chain = 0;
         USED.clear();
-    }
-
-    private static void popup(String text, int color) {
-        POPUPS.addFirst(new Popup(text, color, now()));
-        while (POPUPS.size() > 4) POPUPS.removeLast();
-    }
-
-    private static String unlocks(int lvl) {
-        Set<String> names = new LinkedHashSet<>();
-        for (Trick t : Trick.values()) if (t.level == lvl && t != Trick.NONE) names.add(t.title);
-        if (names.isEmpty()) return "!";
-        List<String> list = new ArrayList<>(names);
-        return " - Unlocked: " + String.join(", ", list);
-    }
-
-    public static String fmt(long n) {
-        return String.format("%,d", n);
     }
 
     private static long now() {
@@ -173,20 +235,32 @@ public final class StyleScore {
         try (Reader r = Files.newBufferedReader(f)) {
             Properties pr = new Properties();
             pr.load(r);
-            total = Long.parseLong(pr.getProperty("total", "0"));
-            best = Long.parseLong(pr.getProperty("best", "0"));
+            xp = Double.parseDouble(pr.getProperty("xp", "0"));
             tutorial = Integer.parseInt(pr.getProperty("tutorial", "0"));
+            for (String name : pr.getProperty("skills", "").split(",")) {
+                if (name.isBlank()) continue;
+                try {
+                    UNLOCKED.add(Skill.valueOf(name.trim()));
+                } catch (IllegalArgumentException ignored) {
+                }
+            }
         } catch (Exception ignored) {
         }
     }
 
-    private static void save() {
+    public static void save() {
+        dirty = 0;
         Properties pr = new Properties();
-        pr.setProperty("total", Long.toString(total));
-        pr.setProperty("best", Long.toString(best));
+        pr.setProperty("xp", Double.toString(xp));
         pr.setProperty("tutorial", Integer.toString(tutorial));
+        StringBuilder sb = new StringBuilder();
+        for (Skill s : UNLOCKED) {
+            if (sb.length() > 0) sb.append(',');
+            sb.append(s.name());
+        }
+        pr.setProperty("skills", sb.toString());
         try (Writer w = Files.newBufferedWriter(file())) {
-            pr.store(w, "Sky Swinger style progress");
+            pr.store(w, "Sky Swinger progress");
         } catch (Exception ignored) {
         }
     }

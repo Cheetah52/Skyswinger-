@@ -29,7 +29,12 @@ public enum Trick {
     WALL_KICK("Wall Kick", 80, 1, 1),
     HERO_LANDING("Hero Landing", 120, 24, 1),
     PERCH("Perch", 0, 0, 1),
-    WEB_COCOON("Web Cocoon", 200, 1, 1);
+    WEB_COCOON("Web Cocoon", 200, 1, 1),
+    // added in Update 5
+    WEB_GLIDE("Web Glide", 60, 0, 1),
+    WEB_SLAM("Web Slam", 120, 0, 1),
+    CHARGED_LEAP("Charged Leap", 50, 1, 1),
+    WEB_BURST("Web Burst", 150, 1, 1);
 
     public final String title;
     public final int points, duration, level;
