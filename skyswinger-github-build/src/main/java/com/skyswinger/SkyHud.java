@@ -71,6 +71,7 @@ public final class SkyHud {
         drawTrapCharge(g, mc.font, now);
         drawLeapCharge(g, mc.font);
         drawSlingCharge(g, mc.font);
+        drawStickCharge(g);
         if (!Config.SHOW_HUD.get()) {
             alpha = 0;
             return;
@@ -264,6 +265,16 @@ public final class SkyHud {
                 }
             }
         }
+    }
+
+    /** Small bar while you hold W + Space at a wall (fills up, then you stick). */
+    private static void drawStickCharge(GuiGraphics g) {
+        float c = SwingClient.stickCharge();
+        if (c <= 0f) return;
+        int cx = g.guiWidth() / 2, cy = g.guiHeight() / 2 + 9;
+        int w = 26;
+        g.fill(cx - w / 2, cy, cx + w / 2, cy + 3, 0x88000000);
+        g.fill(cx - w / 2, cy, cx - w / 2 + Math.round(w * c), cy + 3, 0xFFB0F0B0);
     }
 
     /** Slingshot zip pull-back bar under the crosshair while you hold Z. */

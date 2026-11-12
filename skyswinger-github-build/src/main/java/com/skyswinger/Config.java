@@ -87,7 +87,7 @@ public final class Config {
                 .define("animations", true);
         SPEED_FOV = b.comment("Widen your view when you go fast").define("speedFov", true);
         CAMERA_TILT = b.comment("Camera leans into turns while swinging").define("cameraTilt", true);
-        CAMERA_ROLL = b.comment("Camera turns sideways on walls, upside down on ceilings and when you loop over a swing")
+        CAMERA_ROLL = b.comment("Camera rolls upside down when you swing way up over the top of your web")
                 .define("cameraRoll", true);
         INVERT_ROLL = b.comment("Flip the direction of the camera roll if it feels backwards").define("invertCameraRoll", false);
         WIND = b.comment("Wind streaks at the edges of the screen when you go fast").define("windStreaks", true);

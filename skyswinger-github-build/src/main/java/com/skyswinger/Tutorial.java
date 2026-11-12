@@ -11,7 +11,7 @@ public final class Tutorial {
         SWING("Hold %s to shoot a web and swing"),
         PUMP("Press %s while swinging to pump and build speed"),
         RELEASE("Let go of %s to fly off the web"),
-        CRAWL("Jump at a wall to stick to it. Space jumps off, Sneak lets go"),
+        CRAWL("Hold W + Space at a wall to stick to it. Space jumps off, Sneak lets go"),
         FLIP("Press %s in the air to do a flip"),
         ZIP("Press %s to zip to where you're looking"),
         SHOOT("Tap %s to shoot a web"),

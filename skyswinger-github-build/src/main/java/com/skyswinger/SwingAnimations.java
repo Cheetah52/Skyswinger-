@@ -71,9 +71,13 @@ public final class SwingAnimations {
         AnimState s = AnimState.find(p);
         Kind kind = kind(p, s);
         if (kind == Kind.NONE) {
-            if (s != null) s.lean = UP;
+            if (s != null) {
+                s.lean = UP;
+                s.surfaceQ = null;
+            }
             return;
         }
+        if (kind != Kind.WALLRUN && kind != Kind.CRAWL && kind != Kind.CEILING && s != null) s.surfaceQ = null;
 
         PlayerModel<AbstractClientPlayer> model = event.getRenderer().getModel();
         model.crouching = false; // our poses replace the crouch pose
@@ -153,7 +157,9 @@ public final class SwingAnimations {
     private static void surfaceBody(PoseStack ps, Player p, AnimState s, Kind kind, float pt, float bodyYaw) {
         Vec3 n = s.trickData.lengthSqr() > 1.0E-4 ? s.trickData.normalize() : UP;
         Vec3 vel = new Vec3(p.getX() - p.xo, p.getY() - p.yo, p.getZ() - p.zo);
-        Vec3 onWall = vel.subtract(n.scale(vel.dot(n)));
+        Vec3 rawOnWall = vel.subtract(n.scale(vel.dot(n)));
+        if (rawOnWall.lengthSqr() > 4.0E-4) s.surfaceDir = s.surfaceDir.lerp(rawOnWall.normalize(), 0.2);
+        Vec3 onWall = s.surfaceDir.subtract(n.scale(s.surfaceDir.dot(n)));
         Vec3 bodyFwd = forward(bodyYaw);
         Vec3 front, up;
         float pivot = p.getBbHeight() * 0.5f;
@@ -201,9 +207,12 @@ public final class SwingAnimations {
             twist = (float) Math.atan2(cross.dot(upWant), f0.dot(fw));
         }
         Quaternionf q = new Quaternionf().rotationAxis(twist, upWant).mul(q1);
+        // ease toward it so the body doesn't jitter or snap
+        if (s.surfaceQ == null) s.surfaceQ = new Quaternionf(q);
+        else s.surfaceQ.slerp(q, 0.25f);
 
         ps.translate(offset.x, offset.y + pivot, offset.z);
-        ps.mulPose(q);
+        ps.mulPose(new Quaternionf(s.surfaceQ));
         ps.translate(0, -pivot, 0);
     }
 

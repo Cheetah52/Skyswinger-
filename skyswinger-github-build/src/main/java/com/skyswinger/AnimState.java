@@ -28,6 +28,8 @@ public final class AnimState {
     public long looseTime;
 
     public Vec3 lean = new Vec3(0, 1, 0); // smoothed body lean, used when drawing
+    public org.joml.Quaternionf surfaceQ;  // smoothed body turn on walls/ceilings, used when drawing
+    public Vec3 surfaceDir = Vec3.ZERO;    // smoothed direction of movement on a wall
 
     public static AnimState of(Player p) {
         return STATES.computeIfAbsent(p.getId(), k -> new AnimState());

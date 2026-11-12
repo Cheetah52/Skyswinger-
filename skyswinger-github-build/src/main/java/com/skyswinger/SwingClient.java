@@ -135,6 +135,9 @@ public final class SwingClient {
     private static Vec3 crawlN = UP;                 // the surface's normal (points away from the wall/ceiling)
     private static Vec3 lastCrawlMove = Vec3.ZERO;
     private static int crawlCooldown, crawlAge, wallPushTicks, wallRunTime;
+    private static final int STICK_TICKS = 10;      // hold W + Space at a wall this long (half a second) to stick
+    private static int crawlRightSign = 1;          // keeps A/D from flipping when you look along the wall
+    private static int lostTicks;                   // ticks the wall has been missing (small gaps don't drop you)
 
     // ---- swing extras ----
     private static boolean useLeft, caught, aboveTop, swingKeyWasDown;
@@ -172,8 +175,12 @@ public final class SwingClient {
     public static boolean isDiving() { return diving; }
     public static boolean isWallRunning() { return crawling && wallRunning; }
     public static boolean isOnWall() { return crawling; }
+    /** 0..1 how close you are to sticking to the wall (while holding W + Space at it). */
+    public static float stickCharge() { return crawling || wallPushTicks < 2 ? 0f : Math.min(1f, wallPushTicks / (float) STICK_TICKS); }
     public static Vec3 wallNormal() { return crawlN; }
     public static boolean usingLeftHand() { return useLeft; }
+    public static boolean isDoubleWeb() { return doubleWeb; }
+    public static boolean lastShotLeft() { return shotLeft; }
     /** 0..1 how pulled back the slingshot zip is (0 = not charging). */
     public static float slingCharge() {
         return zipHeld < 3 || !StyleScore.has(Skill.SLINGSHOT_ZIP) ? 0f : Math.min(1f, zipHeld / (float) SLING_TICKS);
@@ -504,15 +511,7 @@ public final class SwingClient {
     private static void startZip(Player p, boolean slingshot) {
         if (!canWeb(p, 0)) return;
         long now = p.level().getGameTime();
-        // zip chaining: zip again right as you arrive (or just after) for a free, faster zip
-        boolean perfect = (zipTarget != null && zipTarget.distanceTo(center(p)) < 5.0) || now - lastZipEnd <= 6;
-        if (perfect) {
-            zipChain = Math.min(zipChain + 1, 4);
-            StyleScore.trick(Trick.PERFECT_ZIP, p.getDeltaMovement().length());
-        } else {
-            if (!ZIP_BURST.tryUse(now)) return;
-            zipChain = 0;
-        }
+        if (!ZIP_BURST.tryUse(now)) return;
         Tutorial.done(Tutorial.Step.ZIP);
         StyleScore.xp(1);
         double range = slingshot ? ZIP_RANGE * 1.6 : ZIP_RANGE;
@@ -594,7 +593,12 @@ public final class SwingClient {
             StyleScore.locked(Skill.ZIP_VAULT);
         }
 
-        if (d < 2.2 || ++zipTicks > ZIP_MAX_TICKS) {
+        boolean toSurface = zipNormal != null || zipEntity != null;
+        boolean bumped = zipTicks > 2 && toSurface && (p.horizontalCollision || p.verticalCollision);
+        double speedNow = Config.ZIP_SPEED.get() * (zipSling ? 1.8 : 1.0);
+        // at high speed you'd fly past the target in one tick: count that as arriving (no bouncing back)
+        boolean passing = !toSurface && d < speedNow + 0.5;
+        if (d < 2.2 || bumped || passing || ++zipTicks > ZIP_MAX_TICKS) {
             if (zipLaunch) {
                 launchOff(p);
                 return;
@@ -602,18 +606,25 @@ public final class SwingClient {
             Vec3 face = zipNormal;
             boolean sling = zipSling;
             endZip(p);
-            if (sling) {
-                // slingshot: fly on past the target
-                p.setDeltaMovement(dir.scale(Config.ZIP_SPEED.get() * 1.3).add(0, 0.5, 0));
+            if (toSurface) {
+                // arriving at a wall/mob: come to a soft stop instead of smashing into it
+                p.setDeltaMovement(p.getDeltaMovement().scale(0.25));
+                glideTicks = 0;
+                // holding W + Space as you arrive at a wall or ceiling: stick to it
+                if (face != null && face.y < 0.5 && Config.WALL_CRAWL.get()
+                        && mc.options.keyUp.isDown() && mc.options.keyJump.isDown()) {
+                    startCrawl(p, face);
+                }
+            } else {
+                // open air: keep flying the way you were going
+                p.setDeltaMovement(dir.scale(speedNow * (sling ? 0.85 : 1.0)));
                 glideTotal = Config.ticks(Config.GLIDE_SECONDS);
                 glideTicks = glideTotal;
-            } else if (face != null && face.y < 0.5 && Config.WALL_CRAWL.get()) {
-                // zipped to a wall or ceiling: stick to it
-                startCrawl(p, face);
             }
             return;
         }
-        double speed = Config.ZIP_SPEED.get() * (1.0 + 0.12 * zipChain) * (zipSling ? 1.8 : 1.0);
+        double speed = speedNow;
+        if (toSurface) speed = Math.min(speed, Math.max(0.5, d * 0.35)); // ease in as you get close
         p.setDeltaMovement(dir.scale(speed));
         p.fallDistance = 0;
         trail(p);
@@ -953,22 +964,26 @@ public final class SwingClient {
      */
     private static void tryStartCrawl(Player p, Minecraft mc) {
         if (!Config.WALL_CRAWL.get() || crawlCooldown > 0 || p.isInWater() || p.isPassenger()
-                || p.getAbilities().flying || p.isFallFlying() || slamming) return;
-        Vec3 n = null;
-        // bumped your head going up: ceiling
-        if (!p.onGround() && p.verticalCollision && prevVel.y > 0.05 && surfaceAt(p, DOWN)) n = DOWN;
-        if (n == null && p.horizontalCollision) {
-            boolean pushing = mc.options.keyUp.isDown();
-            wallPushTicks = pushing ? wallPushTicks + 1 : 0;
-            if (!p.onGround() || wallPushTicks >= 5) {
-                Vec3 hint = new Vec3(prevVel.x, 0, prevVel.z);
-                if (hint.lengthSqr() < 1.0E-4) hint = new Vec3(p.getLookAngle().x, 0, p.getLookAngle().z);
-                n = findWall(p, hint.lengthSqr() < 1.0E-4 ? new Vec3(0, 0, 1) : hint.normalize());
-            }
-        } else if (!p.horizontalCollision) {
+                || p.getAbilities().flying || p.isFallFlying() || slamming) {
             wallPushTicks = 0;
+            return;
         }
-        if (n != null) startCrawl(p, n);
+        // you only stick on purpose: hold W + Space at a wall (or under a ceiling) for half a second
+        boolean holding = mc.options.keyUp.isDown() && mc.options.keyJump.isDown();
+        Vec3 n = null;
+        if (holding) {
+            Vec3 look = new Vec3(p.getLookAngle().x, 0, p.getLookAngle().z);
+            if (look.lengthSqr() > 1.0E-4) n = findWall(p, look.normalize());
+            if (n == null && !p.onGround() && surfaceAt(p, DOWN)) n = DOWN;
+        }
+        if (n == null) {
+            wallPushTicks = 0;
+            return;
+        }
+        if (++wallPushTicks >= STICK_TICKS) {
+            wallPushTicks = 0;
+            startCrawl(p, n);
+        }
     }
 
     private static void startCrawl(Player p, Vec3 n) {
@@ -987,6 +1002,7 @@ public final class SwingClient {
         crawling = true;
         wallRunning = false;
         crawlN = n;
+        lostTicks = 0;
         crawlAge = 0;
         wallRunTime = 0;
         crawlJumpWasDown = true; // don't jump off from a Space you were already holding
@@ -1031,27 +1047,44 @@ public final class SwingClient {
             return;
         }
 
-        // still on the surface?
+        // still on the surface? (a couple of ticks of grace so small gaps and window frames don't drop you)
         if (!surfaceAt(p, n)) {
-            if (n.y == 0 && lastCrawlMove.y > 0.02 && feetOnSurface(p, n)) {
+            boolean topOfWall = n.y == 0 && lastCrawlMove.y > 0.02 && feetOnSurface(p, n);
+            if (topOfWall) {
                 // reached the top of the wall: climb up onto it
                 p.setDeltaMovement(n.scale(-0.3).add(0, 0.55, 0));
+                endCrawl(p);
+                crawlCooldown = 6;
+                return;
             }
-            endCrawl(p);
-            crawlCooldown = 6;
-            return;
+            if (++lostTicks > 3) {
+                endCrawl(p);
+                crawlCooldown = 6;
+                return;
+            }
+        } else {
+            lostTicks = 0;
         }
 
-        // movement along the surface, relative to where you're looking
+        // controls work like on the ground:
+        //   on a wall:    W = up, S = down, A / D = left / right on your screen
+        //   on a ceiling: W = where you're looking, A / D = left / right on your screen
         double f = (mc.options.keyUp.isDown() ? 1 : 0) - (mc.options.keyDown.isDown() ? 1 : 0);
         double sd = (mc.options.keyLeft.isDown() ? 1 : 0) - (mc.options.keyRight.isDown() ? 1 : 0);
-        Vec3 look = p.getLookAngle();
-        Vec3 fwd = look.subtract(n.scale(look.dot(n)));
-        if (fwd.lengthSqr() < 0.12) fwd = UP.subtract(n.scale(UP.dot(n)));  // looking right at the wall: W climbs up
-        if (fwd.lengthSqr() < 1.0E-4) fwd = new Vec3(look.x, 0, look.z);
-        if (fwd.lengthSqr() < 1.0E-4) fwd = new Vec3(0, 0, 1);
-        fwd = fwd.normalize();
-        Vec3 right = fwd.cross(n).normalize();
+        double yaw = Math.toRadians(p.getYRot());
+        Vec3 lookFlat = new Vec3(-Math.sin(yaw), 0, Math.cos(yaw));
+        Vec3 screenRight = new Vec3(-Math.cos(yaw), 0, -Math.sin(yaw));
+        Vec3 fwd, right;
+        if (n.y < -0.5) {
+            fwd = lookFlat;
+            right = screenRight;
+        } else {
+            fwd = UP;
+            Vec3 along = n.cross(UP).normalize();                   // horizontal direction along the wall
+            double d = along.dot(screenRight);
+            if (Math.abs(d) > 0.3) crawlRightSign = d >= 0 ? 1 : -1; // only switch when it's clearly the other way
+            right = along.scale(crawlRightSign);
+        }
 
         boolean run = mc.options.keySprint.isDown() && Config.WALL_RUN.get() && (f != 0 || sd != 0);
         if (run && !StyleScore.has(Skill.WALL_RUN)) {
@@ -1070,14 +1103,15 @@ public final class SwingClient {
         }
 
         // moving onto another surface (wall -> ceiling, ceiling -> wall, inside corners)
+        // (only switch to a wall that's in the direction you're moving, so you never flip to the wrong one)
         Vec3 flatMove = new Vec3(move.x, 0, move.z);
         if (n.y < -0.5 && p.horizontalCollision && flatMove.lengthSqr() > 1.0E-4) {
-            Vec3 w = findWall(p, flatMove.normalize());
+            Vec3 w = wallInDirection(p, flatMove.normalize());
             if (w != null) setSurface(p, w, run);
         } else if (n.y == 0 && move.y > 0 && p.verticalCollision && surfaceAt(p, DOWN)) {
             setSurface(p, DOWN, run);
         } else if (n.y == 0 && p.horizontalCollision && flatMove.lengthSqr() > 1.0E-4) {
-            Vec3 w = findWall(p, flatMove.normalize());
+            Vec3 w = wallInDirection(p, flatMove.normalize());
             if (w != null && w.distanceToSqr(n) > 0.1) setSurface(p, w, run);
         }
 
@@ -1088,7 +1122,7 @@ public final class SwingClient {
         }
         if (run && ++wallRunTime % 60 == 0) StyleScore.trick(Trick.WALL_RUN, WALL_RUN_SPEED * 4);
 
-        Vec3 v = move.subtract(crawlN.scale(0.08)); // hug the surface
+        Vec3 v = move.subtract(crawlN.scale(0.06)); // hug the surface
         p.setDeltaMovement(v.x / AIR_DRAG_XZ, v.y / AIR_DRAG_Y + GRAVITY, v.z / AIR_DRAG_XZ);
         p.fallDistance = 0;
         if (run) trail(p);
@@ -1106,13 +1140,36 @@ public final class SwingClient {
         PacketDistributor.sendToServer(new SwingPayload(false)); // a few seconds of fall protection after
     }
 
-    /** Is there a wall (or ceiling) right next to you on the side that n points away from? */
+    /** Is there a wall (or ceiling) right next to you on the side that n points away from? Checks several spots. */
     private static boolean surfaceAt(Player p, Vec3 n) {
         Vec3 c = center(p);
-        double reach = n.y < -0.5 ? p.getBbHeight() * 0.5 + 0.45 : p.getBbWidth() * 0.5 + 0.45;
-        BlockHitResult hit = p.level().clip(new ClipContext(c, c.subtract(n.scale(reach)),
+        if (n.y < -0.5) {
+            double reach = p.getBbHeight() * 0.5 + 0.45;
+            double o = p.getBbWidth() * 0.4;
+            Vec3[] spots = {c, c.add(o, 0, o), c.add(-o, 0, o), c.add(o, 0, -o), c.add(-o, 0, -o)};
+            for (Vec3 sp : spots) if (hits(p, sp, sp.add(0, reach, 0))) return true;
+            return false;
+        }
+        double reach = p.getBbWidth() * 0.5 + 0.5;
+        Vec3[] spots = {c, p.position().add(0, 0.3, 0), p.getEyePosition().add(0, -0.1, 0)};
+        for (Vec3 sp : spots) if (hits(p, sp, sp.subtract(n.scale(reach)))) return true;
+        return false;
+    }
+
+    private static boolean hits(Player p, Vec3 from, Vec3 to) {
+        return p.level().clip(new ClipContext(from, to, ClipContext.Block.COLLIDER, ClipContext.Fluid.NONE, p))
+                .getType() == HitResult.Type.BLOCK;
+    }
+
+    /** A wall straight ahead in this direction (its normal), or null. */
+    private static Vec3 wallInDirection(Player p, Vec3 dir) {
+        Vec3 c = center(p);
+        BlockHitResult hit = p.level().clip(new ClipContext(c, c.add(dir.scale(0.9)),
                 ClipContext.Block.COLLIDER, ClipContext.Fluid.NONE, p));
-        return hit.getType() == HitResult.Type.BLOCK;
+        if (hit.getType() == HitResult.Type.BLOCK && hit.getDirection().getAxis().isHorizontal()) {
+            return Vec3.atLowerCornerOf(hit.getDirection().getNormal());
+        }
+        return null;
     }
 
     /** Wall still there at foot level (used to climb up over the top). */
