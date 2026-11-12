@@ -18,6 +18,10 @@ public final class ClientKeys {
             "key.skyswinger.shoot", InputConstants.Type.KEYSYM, GLFW.GLFW_KEY_V, "key.categories.skyswinger");
     public static final KeyMapping TRICK = new KeyMapping(
             "key.skyswinger.trick", InputConstants.Type.KEYSYM, GLFW.GLFW_KEY_G, "key.categories.skyswinger");
+    public static final KeyMapping LAUNCH = new KeyMapping(
+            "key.skyswinger.launch", InputConstants.Type.KEYSYM, GLFW.GLFW_KEY_B, "key.categories.skyswinger");
+    public static final KeyMapping PULL = new KeyMapping(
+            "key.skyswinger.pull", InputConstants.Type.KEYSYM, GLFW.GLFW_KEY_H, "key.categories.skyswinger");
 
     @SubscribeEvent
     public static void register(RegisterKeyMappingsEvent event) {
@@ -25,5 +29,7 @@ public final class ClientKeys {
         event.register(ZIP);
         event.register(SHOOT);
         event.register(TRICK);
+        event.register(LAUNCH);
+        event.register(PULL);
     }
 }

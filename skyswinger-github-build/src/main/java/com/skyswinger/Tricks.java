@@ -8,6 +8,7 @@ import net.neoforged.neoforge.network.PacketDistributor;
 /**
  * Trick controls (in the air, not on a web):
  *   G + W  front flip        G + S  backflip        G + A / D  side flip
+ *   Space  front flip        S + Space  backflip   (can be turned off in settings)
  *   tap G  spin (corkscrew when going fast)         hold G while falling  swan dive
  *   the same flip twice in a row = double flip
  * Also: automatic release flip when you let go fast, and a landing roll when you land fast.
@@ -25,6 +26,7 @@ public final class Tricks {
     private static boolean pressedWithDir;
     private static int swanStart;
     private static Trick queued = Trick.NONE;
+    private static boolean jumpWasDown = true;
 
     public static void tick(Player p, Minecraft mc) {
         AnimState s = AnimState.of(p);
@@ -41,7 +43,7 @@ public final class Tricks {
 
         // ---- finished tricks ----
         if (s.trick != Trick.NONE && !s.trick.held() && s.trickProgress(age) >= 1f) {
-            if (s.trick != Trick.LANDING_ROLL) StyleScore.trick(s.trick, lastSpeed);
+            if (s.trick.awardOnFinish()) StyleScore.trick(s.trick, lastSpeed);
             Trick next = queued;
             queued = Trick.NONE;
             if (next != Trick.NONE && free) setTrick(p, s, next);
@@ -70,6 +72,13 @@ public final class Tricks {
                 tryStart(p, s, t);
             }
         }
+
+        // Space in the air (off the web) flips too
+        boolean jumpDown = mc.options.keyJump.isDown() && usable;
+        if (Config.SPACE_FLIPS.get() && jumpDown && !jumpWasDown && free) {
+            tryStart(p, s, f < 0 ? Trick.BACKFLIP : Trick.FRONT_FLIP);
+        }
+        jumpWasDown = jumpDown;
 
         if (gDown) {
             gHeld = gHeld < 0 ? 0 : gHeld + 1;
@@ -100,18 +109,27 @@ public final class Tricks {
         lastVel = p.getDeltaMovement();
     }
 
+    /** Swinging into a mob: kick pose + points. */
+    public static void kick(Player p, double speed) {
+        AnimState s = AnimState.of(p);
+        queued = Trick.NONE;
+        setTrick(p, s, Trick.SWING_KICK);
+        StyleScore.trick(Trick.SWING_KICK, speed);
+    }
+
     /** Called when you shoot a web or zip. */
-    public static void onWebAttach(Player p) {
+    public static void onWebAttach(Player p, boolean fromDive) {
         AnimState s = AnimState.of(p);
         int age = p.tickCount;
         if (s.trick == Trick.SWAN_DIVE) {
             endSwan(p, s, age, true);
         } else if (s.trick != Trick.NONE && s.trick != Trick.LANDING_ROLL && s.inTrick(age)) {
-            if (s.trickProgress(age) >= 0.6f) StyleScore.trick(s.trick, lastVel.length()); // nearly done counts
+            if (s.trick.awardOnFinish() && s.trickProgress(age) >= 0.6f) StyleScore.trick(s.trick, lastVel.length()); // nearly done counts
             s.trick = Trick.NONE;
         }
         queued = Trick.NONE;
         if (!p.onGround()) StyleScore.swing();
+        if (fromDive) StyleScore.trick(Trick.DIVE_SWING, lastVel.length()); // pulled out of a dive
     }
 
     /** Called when you let go of a swing. */
@@ -125,7 +143,7 @@ public final class Tricks {
     private static void land(Player p, AnimState s, int age) {
         if (s.trick == Trick.SWAN_DIVE) endSwan(p, s, age, true);
 
-        if (s.inTrick(age) && s.trick != Trick.LANDING_ROLL) {
+        if (s.inTrick(age) && s.trick != Trick.LANDING_ROLL && s.trick != Trick.SWING_KICK) {
             if (s.trickProgress(age) < 0.85f) {
                 StyleScore.crash("Wipeout! Combo lost");
                 s.trick = Trick.NONE;

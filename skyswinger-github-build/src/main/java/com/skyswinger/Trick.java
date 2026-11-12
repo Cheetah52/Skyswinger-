@@ -16,7 +16,14 @@ public enum Trick {
     SWAN_DIVE("Swan Dive", 120, 0, 2),
     CORKSCREW("Corkscrew", 250, 18, 3),
     DOUBLE_FRONT_FLIP("Double Front Flip", 300, 14, 4),
-    DOUBLE_BACKFLIP("Double Backflip", 300, 14, 4);
+    DOUBLE_BACKFLIP("Double Backflip", 300, 14, 4),
+    // moves that score when you do them (added in Update 3 - keep new ones at the end)
+    POINT_LAUNCH("Point Launch", 80, 1, 1),
+    DOUBLE_WEB("Double Web", 40, 1, 1),
+    DIVE_SWING("Dive Swing", 120, 1, 1),
+    WEB_PULL("Web Pull", 60, 1, 1),
+    WEB_TRAP("Web Trap", 100, 1, 1),
+    SWING_KICK("Swing Kick", 150, 8, 1);
 
     public final String title;
     public final int points, duration, level;
@@ -31,6 +38,11 @@ public enum Trick {
     /** Held tricks (like Swan Dive) last as long as you hold the key. */
     public boolean held() {
         return this != NONE && duration == 0;
+    }
+
+    /** Points are given when the trick finishes (some moves score the moment they happen instead). */
+    public boolean awardOnFinish() {
+        return this != LANDING_ROLL && this != SWING_KICK;
     }
 
     public static Trick byId(int id) {

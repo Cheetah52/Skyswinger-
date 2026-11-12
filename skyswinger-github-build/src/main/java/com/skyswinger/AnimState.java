@@ -8,7 +8,7 @@ import net.minecraft.world.phys.Vec3;
 
 /** What each player (you and your friends) is doing, so webs and animations can be drawn for everyone. Client side. */
 public final class AnimState {
-    public static final int NONE = 0, SWING = 1, ZIP = 2;
+    public static final int NONE = 0, SWING = 1, ZIP = 2, DOUBLE = 3;
     private static final Map<Integer, AnimState> STATES = new HashMap<>();
 
     public int mode = NONE;
@@ -37,6 +37,10 @@ public final class AnimState {
 
     public static void clear() {
         STATES.clear();
+    }
+
+    public boolean swinging() {
+        return (mode == SWING || mode == DOUBLE) && target != null;
     }
 
     /** 0..1 how far through the current trick (1 = finished). */

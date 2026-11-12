@@ -35,6 +35,7 @@ public final class SkyHud {
         long now = p.level().getGameTime();
 
         if (Config.SHOW_SCORE.get()) drawScore(g, mc.font, now);
+        drawTrapCharge(g, mc.font, now);
         if (!Config.SHOW_HUD.get()) {
             alpha = 0;
             return;
@@ -162,6 +163,21 @@ public final class SkyHud {
             String best = "Best " + StyleScore.fmt(StyleScore.best());
             g.drawString(font, best, sx, cy - 24, argb(0.7f, StyleScore.GRAY), true);
         }
+    }
+
+    /** Small charge bar under the crosshair while you hold V. */
+    private static void drawTrapCharge(GuiGraphics g, Font font, long now) {
+        float c = SwingClient.trapCharge();
+        if (c <= 0f) return;
+        int cx = g.guiWidth() / 2, cy = g.guiHeight() / 2 + 9;
+        int w = 26;
+        boolean ready = c >= 1f;
+        boolean cooling = SwingClient.TRAP_BURST.isLocked(now);
+        g.fill(cx - w / 2, cy, cx + w / 2, cy + 3, 0x88000000);
+        g.fill(cx - w / 2, cy, cx - w / 2 + Math.round(w * c), cy + 3,
+                0xFF000000 | (cooling ? StyleScore.GRAY : ready ? StyleScore.GOLD : 0xE6F4FF));
+        if (ready) g.drawCenteredString(font, cooling ? "Trap recharging" : "TRAP", cx, cy + 5,
+                0xFF000000 | (cooling ? StyleScore.GRAY : StyleScore.GOLD));
     }
 
     // ======== helpers ========

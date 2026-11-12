@@ -23,9 +23,10 @@ import org.joml.Quaternionf;
  */
 @EventBusSubscriber(modid = SkySwinger.MODID, value = Dist.CLIENT)
 public final class SwingAnimations {
-    public enum Kind { NONE, SWING, ZIP, TRICK, ROLL, SWAN, FALL, GLIDE }
+    public enum Kind { NONE, SWING, ZIP, TRICK, ROLL, SWAN, DIVE, KICK, FALL, GLIDE }
 
     private static final double MAX_LEAN = Math.toRadians(75);
+    private static final double MAX_DIVE_LEAN = Math.toRadians(165); // head-first dives can tip almost upside down
     private static final Vec3 UP = new Vec3(0, 1, 0);
     private static final float TAU = (float) (Math.PI * 2.0);
     private static final float PI = (float) Math.PI;
@@ -35,7 +36,8 @@ public final class SwingAnimations {
     // ======== what pose is this player in? ========
     public static Kind kind(Player p, AnimState s) {
         if (s == null || !Config.ANIMATIONS.get()) return Kind.NONE;
-        if (s.mode == AnimState.SWING && s.target != null) return Kind.SWING;
+        if (s.trick == Trick.SWING_KICK && s.inTrick(p.tickCount)) return Kind.KICK;
+        if (s.swinging()) return Kind.SWING;
         if (s.mode == AnimState.ZIP && s.target != null) return Kind.ZIP;
         float age = p.tickCount;
         if (s.trick == Trick.LANDING_ROLL && s.inTrick(age)) return Kind.ROLL;
@@ -46,6 +48,7 @@ public final class SwingAnimations {
         if (!air) return Kind.NONE;
         double vy = p.getY() - p.yo;
         double h = Math.sqrt(sq(p.getX() - p.xo) + sq(p.getZ() - p.zo));
+        if (vy < -0.8 && p.getXRot() > 50f) return Kind.DIVE;
         if (vy < -0.6) return Kind.FALL;
         if (h > 0.6) return Kind.GLIDE;
         return Kind.NONE;
@@ -84,7 +87,13 @@ public final class SwingAnimations {
                 Vec3 to = s.target.subtract(center);
                 if (to.lengthSqr() > 1.0E-4) target = UP.lerp(to.normalize(), 0.65).normalize();
             }
-            case SWAN -> target = fwd.scale(0.85).add(0, -0.35, 0).normalize();  // head-first dive
+            case SWAN -> target = fwd.scale(0.55).add(0, -0.85, 0).normalize();  // head-first, arms spread
+            case DIVE -> {
+                // head points the way you're falling, like diving into water
+                Vec3 v = new Vec3(p.getX() - p.xo, p.getY() - p.yo, p.getZ() - p.zo);
+                if (v.lengthSqr() > 1.0E-4) target = v.normalize();
+            }
+            case KICK -> target = s.lean;
             case FALL -> target = fwd.scale(0.9).add(0, 0.25, 0).normalize();    // belly-down skydive
             case GLIDE -> {
                 Vec3 hv = new Vec3(p.getX() - p.xo, 0, p.getZ() - p.zo);
@@ -99,7 +108,7 @@ public final class SwingAnimations {
         pushed = true;
         float pivot = kind == Kind.ROLL ? 0.45f : p.getBbHeight() * 0.5f;
         ps.translate(0, pivot, 0);
-        applyLean(ps, s.lean);
+        applyLean(ps, s.lean, kind == Kind.DIVE || kind == Kind.SWAN ? MAX_DIVE_LEAN : MAX_LEAN);
         if (kind == Kind.TRICK || kind == Kind.ROLL) applyTrick(ps, s.trick, s.trickProgress(age), bodyYaw);
         ps.translate(0, -pivot, 0);
     }
@@ -112,8 +121,8 @@ public final class SwingAnimations {
         }
     }
 
-    private static void applyLean(PoseStack ps, Vec3 lean) {
-        double angle = Math.min(Math.acos(Mth.clamp(lean.y, -1.0, 1.0)), MAX_LEAN);
+    private static void applyLean(PoseStack ps, Vec3 lean, double maxLean) {
+        double angle = Math.min(Math.acos(Mth.clamp(lean.y, -1.0, 1.0)), maxLean);
         if (angle < 0.01) return;
         double ax = lean.z, az = -lean.x;
         double len = Math.sqrt(ax * ax + az * az);
@@ -165,11 +174,27 @@ public final class SwingAnimations {
             }
             case TRICK, ROLL -> poseTrick(m, s.trick, wob);
             case SWAN -> {
-                // arms spread wide like wings, legs straight together
-                set(m.rightArm, 0.1f, 0f, 1.45f + wob);
-                set(m.leftArm, 0.1f, 0f, -1.45f - wob);
-                set(m.rightLeg, 0.05f, 0f, 0.03f);
-                set(m.leftLeg, 0.05f, 0f, -0.03f);
+                // arms spread wide and a little back like wings, back arched, legs straight together
+                set(m.rightArm, 0.3f, 0f, 1.35f + wob);
+                set(m.leftArm, 0.3f, 0f, -1.35f - wob);
+                set(m.rightLeg, 0.15f, 0f, 0.02f);
+                set(m.leftLeg, 0.15f, 0f, -0.02f);
+                m.head.xRot = -0.6f; // looking ahead, not at the ground
+            }
+            case DIVE -> {
+                // arms straight out past your head, body like an arrow, legs together
+                set(m.rightArm, -PI + 0.08f, 0f, 0.12f + wob * 0.5f);
+                set(m.leftArm, -PI + 0.08f, 0f, -0.12f - wob * 0.5f);
+                set(m.rightLeg, 0.04f + wob * 0.5f, 0f, 0.02f);
+                set(m.leftLeg, 0.04f - wob * 0.5f, 0f, -0.02f);
+            }
+            case KICK -> {
+                // both feet forward into the hit
+                if (s.swinging()) set(m.rightArm, -PI + 0.05f, 0f, 0.08f);
+                else set(m.rightArm, 0.6f, 0f, 0.5f);
+                set(m.leftArm, 0.6f, 0f, -0.5f);
+                set(m.rightLeg, -1.5f, 0f, 0.08f);
+                set(m.leftLeg, -1.35f, 0f, -0.08f);
             }
             case FALL -> {
                 // skydive: arms and legs spread
@@ -188,6 +213,7 @@ public final class SwingAnimations {
             default -> { }
         }
 
+        m.hat.copyFrom(m.head);
         // keep the outer skin layer in place
         m.rightSleeve.copyFrom(m.rightArm);
         m.leftSleeve.copyFrom(m.leftArm);
@@ -210,8 +236,14 @@ public final class SwingAnimations {
 
         // web arm reaches straight up along the web (the body is lined up with it)
         set(m.rightArm, -PI + 0.05f, 0f, 0.08f);
-        // free arm out for balance
-        set(m.leftArm, -0.3f - trail * 0.3f, 0f, -1.1f + tuck * 0.5f);
+        if (s.mode == AnimState.DOUBLE) {
+            // double web: both arms up, one on each web
+            set(m.rightArm, -PI + 0.25f, 0f, 0.3f);
+            set(m.leftArm, -PI + 0.25f, 0f, -0.3f);
+        } else {
+            // free arm out for balance
+            set(m.leftArm, -0.3f - trail * 0.3f, 0f, -1.1f + tuck * 0.5f);
+        }
         set(m.rightLeg, legX + 0.08f, 0f, 0.05f);
         set(m.leftLeg, legX - 0.04f, 0f, -0.05f);
     }

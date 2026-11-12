@@ -17,6 +17,8 @@ public final class Config {
     public static final ModConfigSpec.DoubleValue LEAP;
     public static final ModConfigSpec.BooleanValue RELEASE_FLIPS, SHOW_SCORE;
     public static final ModConfigSpec.DoubleValue HUD_SCALE;
+    public static final ModConfigSpec.BooleanValue SPACE_FLIPS, DIVE_BOOST;
+    public static final ModConfigSpec.DoubleValue KICK_DAMAGE, TRAP_SECONDS;
     public static final ModConfigSpec.DoubleValue RELEASE_BOOST, GLIDE_SECONDS, GLIDE_KEEP;
     public static final ModConfigSpec.DoubleValue ZIP_SPEED, ZIP_COOLDOWN;
     public static final ModConfigSpec.IntValue ZIP_USES;
@@ -44,11 +46,13 @@ public final class Config {
                 .define("useBlocksIfAimedAt", false);
         LEAP = b.comment("How high you leap when you shoot a web from the ground (0 = off)")
                 .defineInRange("webLeap", 1.1, 0.0, 2.5);
+        DIVE_BOOST = b.comment("Look straight down while falling to dive faster").define("diveBoost", true);
         b.pop();
 
         b.push("tricks");
         RELEASE_FLIPS = b.comment("Do a flip automatically when you let go at high speed").define("releaseFlips", true);
         SHOW_SCORE = b.comment("Show trick points, combos and level-ups").define("showScore", true);
+        SPACE_FLIPS = b.comment("Space in the air does a front flip (S + Space = backflip)").define("spaceFlips", true);
         b.pop();
 
         b.push("momentum");
@@ -89,6 +93,12 @@ public final class Config {
         SHOTS = c.comment("Web shots before the cooldown").defineInRange("shots", 10, 1, 50);
         SHOT_COOLDOWN = c.comment("Web shot cooldown in seconds").defineInRange("cooldownSeconds", 3.0, 0.0, 20.0);
         SHOT_DAMAGE = c.comment("Damage per web shot (1 = half a heart)").defineInRange("damage", 1.0, 0.0, 10.0);
+        TRAP_SECONDS = c.comment("How long a charged web trap holds a mob").defineInRange("trapSeconds", 5.0, 1.0, 20.0);
+        c.pop();
+
+        c.push("combat");
+        KICK_DAMAGE = c.comment("Swing kick damage for each unit of speed (faster = harder)")
+                .defineInRange("swingKickDamage", 2.0, 0.0, 10.0);
         c.pop();
         COMMON_SPEC = c.build();
     }

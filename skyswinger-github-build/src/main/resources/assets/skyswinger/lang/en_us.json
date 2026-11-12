@@ -63,5 +63,16 @@
   "skyswinger.configuration.showScore": "Show Points",
   "skyswinger.configuration.showScore.tooltip": "Show trick points, combos and level-ups.",
   "skyswinger.configuration.hudScale": "Display Size",
-  "skyswinger.configuration.hudScale.tooltip": "Size of the corner display."
+  "skyswinger.configuration.hudScale.tooltip": "Size of the corner display.",
+  "key.skyswinger.launch": "Point Launch",
+  "key.skyswinger.pull": "Web Pull",
+  "skyswinger.configuration.diveBoost": "Dive Boost",
+  "skyswinger.configuration.diveBoost.tooltip": "Look straight down while falling to dive faster.",
+  "skyswinger.configuration.spaceFlips": "Space Flips",
+  "skyswinger.configuration.spaceFlips.tooltip": "Space in the air does a front flip. S + Space does a backflip.",
+  "skyswinger.configuration.trapSeconds": "Trap Time",
+  "skyswinger.configuration.trapSeconds.tooltip": "How many seconds a web trap holds a mob.",
+  "skyswinger.configuration.combat": "Combat",
+  "skyswinger.configuration.swingKickDamage": "Swing Kick Damage",
+  "skyswinger.configuration.swingKickDamage.tooltip": "Damage for each unit of speed. Faster swings hit harder."
 }

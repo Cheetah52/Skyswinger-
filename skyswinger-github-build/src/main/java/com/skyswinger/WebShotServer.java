@@ -10,6 +10,9 @@ import net.minecraft.resources.ResourceLocation;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.sounds.SoundEvent;
 import net.minecraft.sounds.SoundSource;
+import net.minecraft.core.Direction;
+import net.minecraft.world.effect.MobEffectInstance;
+import net.minecraft.world.effect.MobEffects;
 import net.minecraft.world.entity.LivingEntity;
 import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.entity.projectile.ProjectileUtil;
@@ -30,6 +33,8 @@ public final class WebShotServer {
     private static final SoundEvent HIT_SOUND =
             SoundEvent.createVariableRangeEvent(ResourceLocation.withDefaultNamespace("block.cobweb.hit"));
     private static final Map<UUID, Burst> BURSTS = new ConcurrentHashMap<>();
+    private static final Map<UUID, Burst> TRAPS = new ConcurrentHashMap<>();
+    public static final int TRAP_COOLDOWN = 80; // 4 seconds between web traps
 
     /** Shots before the cooldown (from the settings). */
     public static int maxShots() {
@@ -41,12 +46,17 @@ public final class WebShotServer {
         return Config.ticks(Config.SHOT_COOLDOWN);
     }
 
-    public static void fire(Player player) {
+    public static void fire(Player player, boolean charged) {
         if (!(player.level() instanceof ServerLevel level)) return;
         long now = level.getGameTime();
-        Burst burst = BURSTS.computeIfAbsent(player.getUUID(), k -> new Burst(maxShots(), cooldownTicks(), MIN_GAP));
-        burst.configure(maxShots(), cooldownTicks());
-        if (!burst.tryUse(now)) return;
+        if (charged) {
+            Burst trap = TRAPS.computeIfAbsent(player.getUUID(), k -> new Burst(1, TRAP_COOLDOWN, 0));
+            if (!trap.tryUse(now)) return;
+        } else {
+            Burst burst = BURSTS.computeIfAbsent(player.getUUID(), k -> new Burst(maxShots(), cooldownTicks(), MIN_GAP));
+            burst.configure(maxShots(), cooldownTicks());
+            if (!burst.tryUse(now)) return;
+        }
 
         Vec3 eye = player.getEyePosition();
         Vec3 look = player.getLookAngle();
@@ -68,10 +78,27 @@ public final class WebShotServer {
             BlockPos feet = target.blockPosition();
             spawnWeb(level, player, feet);
             spawnWeb(level, player, feet.above());
+            if (charged) {
+                // web trap: webs all around and the mob is stuck for a while
+                for (Direction d : Direction.Plane.HORIZONTAL) spawnWeb(level, player, feet.relative(d));
+                int ticks = Config.ticks(Config.TRAP_SECONDS);
+                target.addEffect(new MobEffectInstance(MobEffects.MOVEMENT_SLOWDOWN, ticks, 4));
+                target.addEffect(new MobEffectInstance(MobEffects.WEAKNESS, ticks, 1));
+                target.setDeltaMovement(Vec3.ZERO);
+                target.hurtMarked = true;
+            }
             effects(level, target.getX(), target.getY(0.5), target.getZ());
         } else if (blockFound) {
             BlockPos pos = blockHit.getBlockPos().relative(blockHit.getDirection());
-            if (pos.distSqr(player.blockPosition()) >= 6.0) spawnWeb(level, player, pos);
+            if (pos.distSqr(player.blockPosition()) >= 6.0) {
+                spawnWeb(level, player, pos);
+                if (charged) {
+                    // a bigger web patch on the wall/floor
+                    for (Direction d : Direction.values()) {
+                        if (d.getAxis() != blockHit.getDirection().getAxis()) spawnWeb(level, player, pos.relative(d));
+                    }
+                }
+            }
             Vec3 l = blockHit.getLocation();
             effects(level, l.x, l.y, l.z);
         }
