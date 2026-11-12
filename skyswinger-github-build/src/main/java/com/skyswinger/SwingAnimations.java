@@ -23,7 +23,7 @@ import org.joml.Quaternionf;
  */
 @EventBusSubscriber(modid = SkySwinger.MODID, value = Dist.CLIENT)
 public final class SwingAnimations {
-    public enum Kind { NONE, SWING, ZIP, TRICK, ROLL, SWAN, DIVE, KICK, FALL, GLIDE }
+    public enum Kind { NONE, SWING, ZIP, TRICK, ROLL, SWAN, DIVE, KICK, WALLRUN, PERCH, HERO, FALL, GLIDE }
 
     private static final double MAX_LEAN = Math.toRadians(75);
     private static final double MAX_DIVE_LEAN = Math.toRadians(165); // head-first dives can tip almost upside down
@@ -37,6 +37,9 @@ public final class SwingAnimations {
     public static Kind kind(Player p, AnimState s) {
         if (s == null || !Config.ANIMATIONS.get()) return Kind.NONE;
         if (s.trick == Trick.SWING_KICK && s.inTrick(p.tickCount)) return Kind.KICK;
+        if (s.trick == Trick.WALL_RUN) return Kind.WALLRUN;
+        if (s.trick == Trick.HERO_LANDING && s.inTrick(p.tickCount)) return Kind.HERO;
+        if (s.trick == Trick.PERCH && p.onGround()) return Kind.PERCH;
         if (s.swinging()) return Kind.SWING;
         if (s.mode == AnimState.ZIP && s.target != null) return Kind.ZIP;
         float age = p.tickCount;
@@ -94,6 +97,12 @@ public final class SwingAnimations {
                 if (v.lengthSqr() > 1.0E-4) target = v.normalize();
             }
             case KICK -> target = s.lean;
+            case WALLRUN -> {
+                // feet on the wall, body tipped away from it
+                if (s.trickData.lengthSqr() > 1.0E-4) target = s.trickData.scale(0.75).add(0, 0.65, 0).normalize();
+            }
+            case PERCH -> target = UP.lerp(fwd, 0.3).normalize();
+            case HERO -> target = UP.lerp(fwd, 0.35).normalize();
             case FALL -> target = fwd.scale(0.9).add(0, 0.25, 0).normalize();    // belly-down skydive
             case GLIDE -> {
                 Vec3 hv = new Vec3(p.getX() - p.xo, 0, p.getZ() - p.zo);
@@ -107,6 +116,11 @@ public final class SwingAnimations {
         ps.pushPose();
         pushed = true;
         float pivot = kind == Kind.ROLL ? 0.45f : p.getBbHeight() * 0.5f;
+        if (kind == Kind.PERCH) ps.translate(0, -0.45f, 0);  // crouched low
+        if (kind == Kind.HERO) {
+            float age2 = s.trickProgress(age);
+            ps.translate(0, -0.5f * (1f - Math.max(0f, age2 - 0.7f) / 0.3f), 0); // kneel, then rise at the end
+        }
         ps.translate(0, pivot, 0);
         applyLean(ps, s.lean, kind == Kind.DIVE || kind == Kind.SWAN ? MAX_DIVE_LEAN : MAX_LEAN);
         if (kind == Kind.TRICK || kind == Kind.ROLL) applyTrick(ps, s.trick, s.trickProgress(age), bodyYaw);
@@ -187,6 +201,25 @@ public final class SwingAnimations {
                 set(m.leftArm, -PI + 0.08f, 0f, -0.12f - wob * 0.5f);
                 set(m.rightLeg, 0.04f + wob * 0.5f, 0f, 0.02f);
                 set(m.leftLeg, 0.04f - wob * 0.5f, 0f, -0.02f);
+            }
+            case WALLRUN -> {
+                // legs keep their running motion; arms out for balance
+                set(m.rightArm, -0.4f + wob, 0f, 0.9f);
+                set(m.leftArm, -0.4f - wob, 0f, -0.9f);
+            }
+            case PERCH -> {
+                // crouched at the edge, forearms resting on knees, looking out
+                set(m.rightArm, -0.95f, -0.1f, 0.1f);
+                set(m.leftArm, -0.95f, 0.1f, -0.1f);
+                set(m.rightLeg, -1.35f, 0.15f, 0.25f);
+                set(m.leftLeg, -1.35f, -0.15f, -0.25f);
+            }
+            case HERO -> {
+                // one knee down, a fist on the ground, the other arm out behind
+                set(m.rightArm, -0.25f, 0f, 0.1f);
+                set(m.leftArm, 0.9f, 0f, -0.9f);
+                set(m.rightLeg, 1.0f, 0f, 0.05f);
+                set(m.leftLeg, -1.25f, 0f, -0.1f);
             }
             case KICK -> {
                 // both feet forward into the hit

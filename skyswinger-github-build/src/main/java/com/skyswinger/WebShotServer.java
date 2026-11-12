@@ -34,7 +34,7 @@ public final class WebShotServer {
             SoundEvent.createVariableRangeEvent(ResourceLocation.withDefaultNamespace("block.cobweb.hit"));
     private static final Map<UUID, Burst> BURSTS = new ConcurrentHashMap<>();
     private static final Map<UUID, Burst> TRAPS = new ConcurrentHashMap<>();
-    public static final int TRAP_COOLDOWN = 80; // 4 seconds between web traps
+    public static final int TRAP_COOLDOWN = 60; // 3 seconds between web traps
 
     /** Shots before the cooldown (from the settings). */
     public static int maxShots() {
@@ -49,6 +49,9 @@ public final class WebShotServer {
     public static void fire(Player player, boolean charged) {
         if (!(player.level() instanceof ServerLevel level)) return;
         long now = level.getGameTime();
+        if (!Gear.hasShooter(player)) return;
+        int cost = charged ? Gear.TRAP_COST : Gear.SHOT_COST;
+        if (!Gear.hasFluid(player, cost)) return;
         if (charged) {
             Burst trap = TRAPS.computeIfAbsent(player.getUUID(), k -> new Burst(1, TRAP_COOLDOWN, 0));
             if (!trap.tryUse(now)) return;
@@ -57,6 +60,8 @@ public final class WebShotServer {
             burst.configure(maxShots(), cooldownTicks());
             if (!burst.tryUse(now)) return;
         }
+
+        Gear.useFluid(player, cost);
 
         Vec3 eye = player.getEyePosition();
         Vec3 look = player.getLookAngle();
@@ -73,6 +78,12 @@ public final class WebShotServer {
 
         if (hit != null && eye.distanceToSqr(hit.getLocation()) <= maxSq) {
             LivingEntity target = (LivingEntity) hit.getEntity();
+            if (charged && CocoonServer.isTrapped(target) && !(target instanceof Player)) {
+                // trapped twice: wrap it up and hang it upside down
+                CocoonServer.cocoon(level, player, target);
+                effects(level, target.getX(), target.getY(0.5), target.getZ());
+                return;
+            }
             float damage = Config.SHOT_DAMAGE.get().floatValue();
             if (damage > 0) target.hurt(level.damageSources().playerAttack(player), damage);
             BlockPos feet = target.blockPosition();

@@ -1,5 +1,10 @@
 package com.skyswinger;
 
+import java.util.ArrayList;
+import java.util.Iterator;
+import java.util.List;
+import java.util.Random;
+
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.Font;
 import net.minecraft.client.gui.GuiGraphics;
@@ -22,6 +27,15 @@ public final class SkyHud {
 
     private static float alpha;
     private static long lastNanos;
+    private static boolean tutorialWasOn = true;
+
+    /** A wind streak flying outward at the edge of the screen. */
+    private static final class Streak {
+        float x, y, dx, dy, life;
+    }
+
+    private static final List<Streak> STREAKS = new ArrayList<>();
+    private static final Random RNG = new Random();
 
     @SubscribeEvent
     public static void onHud(RenderGuiEvent.Post event) {
@@ -33,6 +47,20 @@ public final class SkyHud {
         }
         GuiGraphics g = event.getGuiGraphics();
         long now = p.level().getGameTime();
+        float pt = event.getPartialTick().getGameTimeDeltaPartialTick(true);
+
+        // frame timer (also used for the panel fade)
+        long t = System.nanoTime();
+        float dt = lastNanos == 0 ? 0f : Math.min(0.1f, (t - lastNanos) / 1.0E9f);
+        lastNanos = t;
+
+        drawWind(g, p, dt);
+        DangerSense.draw(g, now, pt);
+
+        boolean tutorialOn = Config.SHOW_TUTORIAL.get();
+        if (tutorialOn && !tutorialWasOn) Tutorial.restart(); // turned back on: start over
+        tutorialWasOn = tutorialOn;
+        Tutorial.draw(g, mc.font, now);
 
         if (Config.SHOW_SCORE.get()) drawScore(g, mc.font, now);
         drawTrapCharge(g, mc.font, now);
@@ -46,14 +74,12 @@ public final class SkyHud {
         boolean show = moving || StyleScore.comboActive() || notFull(web, now) || notFull(zip, now);
 
         // smooth fade in / out
-        long t = System.nanoTime();
-        float dt = lastNanos == 0 ? 0f : Math.min(0.1f, (t - lastNanos) / 1.0E9f);
-        lastNanos = t;
         alpha = show ? Math.min(1f, alpha + dt * 6f) : Math.max(0f, alpha - dt * 3f);
         if (alpha < 0.05f) return;
 
         boolean speedRow = moving && Config.SHOW_SPEED.get();
-        int rows = 3 + (speedRow ? 1 : 0);
+        boolean fluidRow = Gear.usesFluid(p);
+        int rows = 3 + (speedRow ? 1 : 0) + (fluidRow ? 1 : 0);
         int h = PAD * 2 + ROW * rows - 2;
 
         float scale = Config.HUD_SCALE.get().floatValue();
@@ -79,6 +105,10 @@ public final class SkyHud {
         ry += ROW;
         row(g, mc.font, x, ry, "Zip", zip, now);
         ry += ROW;
+        if (fluidRow) {
+            fluidRow(g, mc.font, x, ry, p);
+            ry += ROW;
+        }
         if (speedRow) speedRow(g, mc.font, x, ry, p);
 
         g.pose().popPose();
@@ -107,6 +137,58 @@ public final class SkyHud {
             for (int i = 0; i < max; i++) {
                 int x1 = bx + i * (pw + gap);
                 g.fill(x1, by, x1 + pw, by + bh, i < lit ? col(1f, LIT) : col(0.25f, 0xFFFFFF));
+            }
+        }
+    }
+
+    private static void fluidRow(GuiGraphics g, Font font, int x, int y, Player p) {
+        boolean has = !Gear.shooter(p).isEmpty();
+        float f = has ? Gear.fluid(p) / (float) Gear.maxFluid(p) : 0f;
+        int color = f < 0.2f ? StyleScore.RED : 0xCFE8FF;
+        g.drawString(font, has ? "Tank" : "None", x + PAD, y, col(1f, has ? 0xFFFFFF : StyleScore.RED), true);
+        int bx = x + PAD + LABEL_W, bw = x + W - PAD - bx;
+        g.fill(bx, y + 2, bx + bw, y + 6, col(0.4f, 0x000000));
+        g.fill(bx, y + 2, bx + Math.round(bw * f), y + 6, col(1f, color));
+    }
+
+    /** Wind streaks shooting out from the middle of the screen when you're fast. */
+    private static void drawWind(GuiGraphics g, Player p, float dt) {
+        double speed = p.getDeltaMovement().length();
+        boolean on = Config.WIND.get() && SwingClient.isMoving() && speed > 1.4;
+        int w = g.guiWidth(), h = g.guiHeight();
+        float cx = w / 2f, cy = h / 2f;
+        if (on) {
+            float spawn = (float) ((speed - 1.4) * 40.0) * dt;
+            while (spawn > 0 && STREAKS.size() < 60) {
+                if (spawn < 1f && RNG.nextFloat() > spawn) break;
+                spawn -= 1f;
+                double ang = RNG.nextDouble() * Math.PI * 2.0;
+                float r = (float) (Math.min(w, h) * (0.35 + RNG.nextDouble() * 0.15));
+                Streak s = new Streak();
+                s.dx = (float) Math.cos(ang);
+                s.dy = (float) Math.sin(ang);
+                s.x = cx + s.dx * r;
+                s.y = cy + s.dy * r;
+                s.life = 1f;
+                STREAKS.add(s);
+            }
+        }
+        float move = (float) (300.0 + speed * 120.0) * dt;
+        Iterator<Streak> it = STREAKS.iterator();
+        while (it.hasNext()) {
+            Streak s = it.next();
+            s.x += s.dx * move;
+            s.y += s.dy * move;
+            s.life -= dt * 2.5f;
+            if (s.life <= 0 || s.x < -20 || s.y < -20 || s.x > w + 20 || s.y > h + 20) {
+                it.remove();
+                continue;
+            }
+            int a = (int) (Math.min(1f, s.life) * 0.45f * 255f);
+            for (int i = 0; i < 6; i++) {
+                int px = Math.round(s.x - s.dx * i * 2.5f), py = Math.round(s.y - s.dy * i * 2.5f);
+                int ai = a * (6 - i) / 6;
+                g.fill(px, py, px + 1, py + 1, (ai << 24) | 0xFFFFFF);
             }
         }
     }

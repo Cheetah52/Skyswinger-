@@ -63,6 +63,9 @@ public final class SwingClient {
     private static final double DOUBLE_TIGHTEN = 0.8;    // double web pulls the rope 20% shorter
     private static final double DOUBLE_SPEED = 1.25, DOUBLE_PUMP = 1.3;
     private static final double DIVE_PITCH = 55.0;       // look at least this far down to dive
+    private static final double SMART_RANGE = 48.0;      // how far to look for buildings to stick webs to
+    private static final int WALL_RUN_TICKS = 30;        // longest wall run (1.5 seconds)
+    private static final double WALL_RUN_MIN_SPEED = 0.8;
 
     // vanilla physics values (don't change)
     private static final double GRAVITY = 0.08;
@@ -101,6 +104,12 @@ public final class SwingClient {
     private static long pullStart, pullUntil;
     private static final Map<Integer, Long> KICKED = new HashMap<>();
 
+    private static int wallRunTicks, wallRunAge;
+    private static Vec3 wallNormal, wallDir;
+    private static double wallSpeed;
+    private static boolean wallJumpWasDown = true;
+    private static Vec3 prevVel = Vec3.ZERO;
+
     private static Vec3 shotEnd;
     private static long shotUntil;
 
@@ -118,8 +127,16 @@ public final class SwingClient {
     // ======== used by the HUD, sounds and animations ========
     public static boolean isSwinging() { return anchor != null; }
     public static boolean isZipping() { return zipTarget != null; }
-    public static boolean isMoving() { return anchor != null || zipTarget != null || glideTicks > 0 || diving; }
+    public static boolean isMoving() { return anchor != null || zipTarget != null || glideTicks > 0 || diving || wallRunTicks > 0; }
     public static boolean isDiving() { return diving; }
+    public static boolean isWallRunning() { return wallRunTicks > 0; }
+    /** 0..1 wrist flick right after a web shot (for the first-person hand). */
+    public static float shotFlick(float pt) {
+        Minecraft mc = Minecraft.getInstance();
+        if (mc.level == null || shotEnd == null) return 0f;
+        float age = mc.level.getGameTime() - shotStart + pt;
+        return age < 0 || age > 5 ? 0f : 1f - age / 5f;
+    }
     /** 0..1 how charged the web trap is (0 = not charging). */
     public static float trapCharge() { return shootHeld < 4 ? 0f : Math.min(1f, shootHeld / (float) TRAP_CHARGE_TICKS); }
     public static Vec3 anchor() { return anchor; }
@@ -168,6 +185,7 @@ public final class SwingClient {
         syncBursts();
         if (mc.level != lastLevel) {
             AnimState.clear();
+            CocoonClient.clear();
             lastLevel = mc.level;
         }
         if (player.tickCount % 100 == 0 && mc.level != null) {
@@ -180,17 +198,25 @@ public final class SwingClient {
         while (ClientKeys.ZIP.consumeClick()) { if (usable) startZip(player); }
         while (ClientKeys.LAUNCH.consumeClick()) { if (usable) startLaunch(player); }
         while (ClientKeys.PULL.consumeClick()) { if (usable) webPull(player); }
+        DangerSense.tick(player);
+        if (usable && wallRunTicks == 0) tryStartWallRun(player);
         Tricks.tick(player, mc);
         if (usable) checkKick(player);
+        if (wallRunTicks > 0) {
+            wallRunTick(player, mc, usable);
+            prevVel = player.getDeltaMovement();
+            return;
+        }
 
         if (zipTarget != null) {
             if (!usable) endZip(player); else doZip(player);
+            prevVel = player.getDeltaMovement();
             return;
         }
 
         boolean wants = ClientKeys.SWING.isDown() && usable;
         if (wants && anchor == null) {
-            attach(player);
+            if (canWeb(player, 0)) attach(player);
         } else if (!wants && anchor != null) {
             release(player);
         }
@@ -204,6 +230,7 @@ public final class SwingClient {
             glide(player);
             dive(player);
         }
+        prevVel = player.getDeltaMovement();
     }
 
     // ======== aiming ========
@@ -220,6 +247,20 @@ public final class SwingClient {
         if (eh != null && eye.distanceToSqr(eh.getLocation()) <= maxSq) return new Aim(eh.getLocation(), true);
         if (bh.getType() != HitResult.Type.MISS) return new Aim(bh.getLocation(), true);
         return new Aim(end, false);
+    }
+
+    /** Web Shooter check (survival). Shows a tip if you can't. */
+    private static boolean canWeb(Player p, int fluidCost) {
+        if (!Gear.hasShooter(p)) {
+            Tutorial.hint("You need a Web Shooter in your inventory (iron, string, redstone)");
+            return false;
+        }
+        if (fluidCost > 0 && !Gear.hasFluid(p, fluidCost)) {
+            Tutorial.hint("Out of web fluid! Right-click your Web Shooter with a Web Cartridge");
+            playSfx(p, SFX_FAIL, 0.4f, 1.6f);
+            return false;
+        }
+        return true;
     }
 
     /** The living thing you're aiming at (or null). */
@@ -251,6 +292,7 @@ public final class SwingClient {
     }
 
     private static void shootTrap(Player p) {
+        if (!canWeb(p, Gear.TRAP_COST)) return;
         long now = p.level().getGameTime();
         if (!TRAP_BURST.tryUse(now)) {
             playSfx(p, SFX_FAIL, 0.4f, 1.6f);
@@ -267,8 +309,10 @@ public final class SwingClient {
     }
 
     private static void shootWeb(Player p) {
+        if (!canWeb(p, Gear.SHOT_COST)) return;
         long now = p.level().getGameTime();
         if (!WEB_BURST.tryUse(now)) return;
+        Tutorial.done(Tutorial.Step.SHOOT);
         shotEnd = aim(p, SHOT_RANGE).point();
         shotStart = now;
         shotUntil = now + 10;
@@ -279,14 +323,17 @@ public final class SwingClient {
 
     // ======== web zip ========
     private static void startZip(Player p) {
+        if (!canWeb(p, 0)) return;
         long now = p.level().getGameTime();
         if (!ZIP_BURST.tryUse(now)) return;
+        Tutorial.done(Tutorial.Step.ZIP);
         Aim a = aim(p, ZIP_RANGE);
         beginZip(p, a.hit() ? a.point() : p.getEyePosition().add(p.getLookAngle().scale(ZIP_AIR_DISTANCE)), false, null);
     }
 
     /** Point launch: zip to the top edge of the block you're aiming at, then get flung up off it. */
     private static void startLaunch(Player p) {
+        if (!canWeb(p, 0)) return;
         Vec3 eye = p.getEyePosition();
         BlockHitResult hit = p.level().clip(new ClipContext(eye, eye.add(p.getLookAngle().scale(LAUNCH_RANGE)),
                 ClipContext.Block.COLLIDER, ClipContext.Fluid.NONE, p));
@@ -302,6 +349,7 @@ public final class SwingClient {
             top = top.above();
         }
         beginZip(p, Vec3.atBottomCenterOf(top.above()).add(0, 0.5, 0), true, null);
+        Tutorial.done(Tutorial.Step.LAUNCH);
     }
 
     private static void beginZip(Player p, Vec3 target, boolean launch, Entity follow) {
@@ -384,6 +432,7 @@ public final class SwingClient {
                 target = hit.getLocation();
             }
         }
+        if (target == null && Config.SMART_ANCHORS.get()) target = smartAnchor(p);
         if (target == null) {
             Vec3 flat = new Vec3(look.x, 0, look.z);
             flat = flat.lengthSqr() < 1.0E-4 ? Vec3.directionFromRotation(0, p.getYRot()) : flat.normalize();
@@ -407,6 +456,41 @@ public final class SwingClient {
             p.setDeltaMovement(v.x, leap, v.z);
         }
         sendWeb(p, AnimState.SWING, anchor);
+        Tutorial.done(Tutorial.Step.SWING);
+    }
+
+    /**
+     * Smart anchors: look up and ahead for something tall (a building, a tree) and stick the web to it.
+     * Returns null if there's nothing good, so the web goes to the sky instead.
+     */
+    private static Vec3 smartAnchor(Player p) {
+        Vec3 eye = p.getEyePosition();
+        Vec3 look = p.getLookAngle();
+        Vec3 flat = new Vec3(look.x, 0, look.z);
+        if (flat.lengthSqr() < 1.0E-4) return null;
+        flat = flat.normalize();
+        Vec3 best = null;
+        double bestScore = -1.0E9;
+        for (float yawOff : new float[] {-40f, -20f, 0f, 20f, 40f}) {
+            for (float pitch : new float[] {-35f, -50f, -65f}) {
+                Vec3 dir = Vec3.directionFromRotation(pitch, p.getYRot() + yawOff);
+                BlockHitResult hit = p.level().clip(new ClipContext(eye, eye.add(dir.scale(SMART_RANGE)),
+                        ClipContext.Block.COLLIDER, ClipContext.Fluid.NONE, p));
+                if (hit.getType() != HitResult.Type.BLOCK) continue;
+                Vec3 h = hit.getLocation();
+                double up = h.y - eye.y;
+                Vec3 hv = new Vec3(h.x - eye.x, 0, h.z - eye.z);
+                double horiz = hv.length();
+                if (up < 6.0 || horiz < 4.0) continue; // too low or right on top of you
+                double forward = hv.scale(1.0 / horiz).dot(flat);
+                double score = forward * 2.0 + up / 20.0 - Math.abs(horiz - 18.0) / 30.0;
+                if (score > bestScore) {
+                    bestScore = score;
+                    best = h;
+                }
+            }
+        }
+        return bestScore > 0.5 ? best : null;
     }
 
     private static void release(Player p) {
@@ -419,6 +503,7 @@ public final class SwingClient {
         p.setDeltaMovement(p.getDeltaMovement().scale(Config.RELEASE_BOOST.get()));
         sendWeb(p, AnimState.NONE, null);
         Tricks.onRelease(p, speed);
+        Tutorial.done(Tutorial.Step.RELEASE);
     }
 
     /** Tell the server (and through it, your friends) what your web is doing. */
@@ -524,6 +609,96 @@ public final class SwingClient {
         sendWeb(p, AnimState.DOUBLE, anchor);
     }
 
+    // ======== wall run ========
+    /** Hit a wall at an angle while going fast: start running along it. */
+    private static void tryStartWallRun(Player p) {
+        if (!Config.WALL_RUN.get() || !p.horizontalCollision || p.onGround() || p.isInWater()) return;
+        if (!(anchor != null || zipTarget != null || glideTicks > 0 || diving)) return;
+        Vec3 flat = new Vec3(prevVel.x, 0, prevVel.z);
+        if (flat.length() < WALL_RUN_MIN_SPEED) return;
+        Vec3 n = findWall(p, flat.normalize());
+        if (n == null) return;
+        Vec3 along = flat.subtract(n.scale(flat.dot(n)));
+        if (along.length() < 0.5) return; // head-on: that's a wall smack, not a wall run
+
+        if (anchor != null) {
+            letGo(p, anchor, 250, 250, 255);
+            anchor = null;
+            doubleWeb = false;
+        }
+        if (zipTarget != null) {
+            zipTarget = null;
+            zipLaunch = false;
+            zipEntity = null;
+        }
+        wallNormal = n;
+        wallDir = along.normalize();
+        wallSpeed = Math.max(0.6, along.length());
+        wallRunTicks = WALL_RUN_TICKS;
+        wallRunAge = 0;
+        wallJumpWasDown = true; // don't kick off from a Space you were already holding
+        glideTicks = 0;
+        sendWeb(p, AnimState.NONE, null);
+        Tricks.wallRun(p, wallNormal);
+        PacketDistributor.sendToServer(new SwingPayload(true)); // no fall damage while on the wall
+    }
+
+    /** Which way the wall next to you faces (null if there isn't one). */
+    private static Vec3 findWall(Player p, Vec3 hint) {
+        Vec3 c = center(p);
+        Vec3[] dirs = {hint, hint.cross(new Vec3(0, 1, 0)), hint.cross(new Vec3(0, -1, 0))};
+        for (Vec3 d : dirs) {
+            BlockHitResult hit = p.level().clip(new ClipContext(c, c.add(d.scale(1.2)),
+                    ClipContext.Block.COLLIDER, ClipContext.Fluid.NONE, p));
+            if (hit.getType() == HitResult.Type.BLOCK && hit.getDirection().getAxis().isHorizontal()) {
+                return Vec3.atLowerCornerOf(hit.getDirection().getNormal());
+            }
+        }
+        return null;
+    }
+
+    private static void wallRunTick(Player p, Minecraft mc, boolean usable) {
+        wallRunAge++;
+        boolean jump = mc.options.keyJump.isDown() && usable;
+        boolean kick = jump && !wallJumpWasDown;
+        wallJumpWasDown = jump;
+
+        // still a wall there?
+        Vec3 c = center(p);
+        BlockHitResult hit = p.level().clip(new ClipContext(c, c.subtract(wallNormal.scale(1.0)),
+                ClipContext.Block.COLLIDER, ClipContext.Fluid.NONE, p));
+        boolean wall = hit.getType() == HitResult.Type.BLOCK;
+
+        if (kick) {
+            // kick off the wall
+            p.setDeltaMovement(wallNormal.scale(0.85).add(wallDir.scale(0.5)).add(0, 0.75, 0));
+            StyleScore.trick(Trick.WALL_KICK, p.getDeltaMovement().length());
+            playSfx(p, SFX_KICK, 0.4f, 1.3f);
+            endWallRun(p, true);
+            return;
+        }
+        if (!wall || p.onGround() || --wallRunTicks <= 0 || !usable) {
+            endWallRun(p, wall && !p.onGround());
+            return;
+        }
+        double speed = wallSpeed * Math.pow(0.985, wallRunAge);
+        double up = 0.12 - 0.012 * wallRunAge; // a little arc: up at first, then sliding down
+        p.setDeltaMovement(wallDir.scale(speed).add(0, up, 0).subtract(wallNormal.scale(0.05)));
+        p.fallDistance = 0;
+        trail(p);
+    }
+
+    private static void endWallRun(Player p, boolean glideAfter) {
+        if (wallRunAge >= 10) StyleScore.trick(Trick.WALL_RUN, wallSpeed);
+        wallRunTicks = 0;
+        Tricks.wallRun(p, null);
+        PacketDistributor.sendToServer(new SwingPayload(false));
+        if (glideAfter) {
+            glideTotal = Config.ticks(Config.GLIDE_SECONDS);
+            glideTicks = glideTotal;
+        }
+    }
+
     /** Dive boost: look down while falling to speed up. Grab a web to pull out of it. */
     private static void dive(Player p) {
         boolean was = diving;
@@ -542,6 +717,7 @@ public final class SwingClient {
 
     /** Web pull: small mobs get yanked to you; big mobs and players (or if you're sneaking) pull you to them. */
     private static void webPull(Player p) {
+        if (!canWeb(p, Gear.PULL_COST)) return;
         long now = p.level().getGameTime();
         LivingEntity e = aimEntity(p, PULL_RANGE);
         if (e == null) {
@@ -612,6 +788,7 @@ public final class SwingClient {
                 double height = center(p).y - anchor.y;
                 double reach = height + v.lengthSqr() / (2.0 * GRAVITY);
                 if (reach > -PUMP_HEIGHT_LIMIT) return v; // already as big as a real swing gets
+                Tutorial.done(Tutorial.Step.PUMP);
                 return v.add(t.scale(along * pumpStrength));
             }
             return v.add(t.scale(along * pumpStrength * BRAKE)); // pushing against the swing slows it
@@ -745,6 +922,35 @@ public final class SwingClient {
         curAlpha = 255;
     }
 
+    /** Web wrapped around cocooned mobs, hanging from a strand. */
+    private static void drawCocoons(PoseStack.Pose pose, VertexConsumer vc, Player me, float pt) {
+        for (Integer id : CocoonClient.all().keySet()) {
+            if (!(me.level().getEntity(id) instanceof LivingEntity e)) continue;
+            Vec3 base = e.getPosition(pt);
+            double h = e.getBbHeight(), r = e.getBbWidth() * 0.62;
+            int n = 56;
+            double turns = 7.0;
+            Vec3 prev1 = null, prev2 = null;
+            for (int i = 0; i <= n; i++) {
+                double t = i / (double) n;
+                double ang = t * turns * 2.0 * Math.PI;
+                double y = base.y + t * h;
+                double rr = r * (0.75 + 0.25 * Math.sin(Math.PI * t));
+                Vec3 p1 = new Vec3(base.x + Math.cos(ang) * rr, y, base.z + Math.sin(ang) * rr);
+                Vec3 p2 = new Vec3(base.x + Math.cos(-ang + 1.3) * rr, y, base.z + Math.sin(-ang + 1.3) * rr);
+                if (prev1 != null) {
+                    seg(pose, vc, prev1, p1, 245, 245, 250);
+                    seg(pose, vc, prev2, p2, 215, 225, 235);
+                }
+                prev1 = p1;
+                prev2 = p2;
+            }
+            // the strand it hangs from
+            Vec3 top = base.add(0, h, 0);
+            seg(pose, vc, top, top.add(0, 3.5, 0), 250, 250, 255);
+        }
+    }
+
     /** Is any other player's web on screen? */
     private static boolean othersVisible(Player me, long now) {
         for (Map.Entry<Integer, AnimState> e : AnimState.all().entrySet()) {
@@ -793,7 +999,8 @@ public final class SwingClient {
         boolean loose = looseFrom != null && now - looseTime < LOOSE_WEB_TICKS;
         if (!loose) looseFrom = null;
         boolean others = othersVisible(p, now);
-        if (anchor == null && zipTarget == null && !shot && !loose && !others && !pulling) return;
+        boolean cocoons = CocoonClient.any(now);
+        if (anchor == null && zipTarget == null && !shot && !loose && !others && !pulling && !cocoons) return;
 
         float pt = event.getPartialTick().getGameTimeDeltaPartialTick(true);
         float time = now + pt;
@@ -846,6 +1053,7 @@ public final class SwingClient {
             drawLoose(pose, vc, looseFrom, looseTo, looseVel, now - looseTime + pt, looseR, looseG, looseB);
         }
         if (others) drawOthers(pose, vc, p, now, pt, time);
+        if (cocoons) drawCocoons(pose, vc, p, pt);
 
         ps.popPose();
         buffers.endBatch(RenderType.lines());

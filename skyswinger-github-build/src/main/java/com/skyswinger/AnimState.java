@@ -17,6 +17,7 @@ public final class AnimState {
 
     public Trick trick = Trick.NONE;
     public int trickStart;
+    public Vec3 trickData = Vec3.ZERO; // e.g. which way the wall faces during a wall run
 
     public Vec3 looseFrom, looseTo;
     public long looseTime;

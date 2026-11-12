@@ -1,6 +1,8 @@
 package com.skyswinger;
 
 import net.minecraft.client.Minecraft;
+import net.minecraft.core.BlockPos;
+import net.minecraft.world.level.Level;
 import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.phys.Vec3;
 import net.neoforged.neoforge.network.PacketDistributor;
@@ -19,6 +21,8 @@ public final class Tricks {
     private static final double RELEASE_FLIP_SPEED = 1.6;
     private static final double ROLL_IMPACT = 0.7;
     private static final double WALL_CRASH_SPEED = 1.2;
+    private static final double HERO_FALL_SPEED = 1.3;   // falling this fast = superhero landing
+    private static final int PERCH_TICKS = 30;           // stand still at a ledge this long to perch
 
     private static boolean wasOnGround = true, wasHurt;
     private static Vec3 lastVel = Vec3.ZERO;
@@ -27,19 +31,22 @@ public final class Tricks {
     private static int swanStart;
     private static Trick queued = Trick.NONE;
     private static boolean jumpWasDown = true;
+    private static int stillTicks;
 
     public static void tick(Player p, Minecraft mc) {
         AnimState s = AnimState.of(p);
         int age = p.tickCount;
         boolean onGround = p.onGround() || p.isInWater() || p.getAbilities().flying || p.isFallFlying();
-        boolean free = !onGround && !SwingClient.isSwinging() && !SwingClient.isZipping();
+        boolean free = !onGround && !SwingClient.isSwinging() && !SwingClient.isZipping() && !SwingClient.isWallRunning();
         double lastSpeed = lastVel.length();
 
         // ---- losing the combo ----
         boolean hurt = p.hurtTime > 0;
         if (hurt && !wasHurt) StyleScore.crash("Ouch! Combo lost");
         wasHurt = hurt;
-        if (p.horizontalCollision && !onGround && lastSpeed > WALL_CRASH_SPEED) StyleScore.crash("Wall smack! Combo lost");
+        if (p.horizontalCollision && !onGround && lastSpeed > WALL_CRASH_SPEED && !SwingClient.isWallRunning()) {
+            StyleScore.crash("Wall smack! Combo lost");
+        }
 
         // ---- finished tricks ----
         if (s.trick != Trick.NONE && !s.trick.held() && s.trickProgress(age) >= 1f) {
@@ -53,6 +60,16 @@ public final class Tricks {
         // ---- landing ----
         if (onGround && !wasOnGround) land(p, s, age);
         wasOnGround = onGround;
+
+        // ---- perch: stand still at the edge of a drop ----
+        Vec3 dm = p.getDeltaMovement();
+        boolean still = p.onGround() && dm.x * dm.x + dm.z * dm.z < 1.0E-4 && !p.isShiftKeyDown() && !SwingClient.isMoving();
+        stillTicks = still ? stillTicks + 1 : 0;
+        if (s.trick == Trick.PERCH && stillTicks == 0) setTrick(p, s, Trick.NONE);
+        if (stillTicks == PERCH_TICKS && s.trick == Trick.NONE && Config.ANIMATIONS.get()) {
+            Vec3 out = ledgeDirection(p);
+            if (out != null) setTrick(p, s, Trick.PERCH, out);
+        }
 
         // ---- input ----
         boolean usable = mc.screen == null && p.isAlive();
@@ -70,6 +87,7 @@ public final class Tricks {
                 Trick t = f > 0 ? Trick.FRONT_FLIP : f < 0 ? Trick.BACKFLIP
                         : side > 0 ? Trick.SIDE_FLIP_LEFT : Trick.SIDE_FLIP_RIGHT;
                 tryStart(p, s, t);
+                Tutorial.done(Tutorial.Step.FLIP);
             }
         }
 
@@ -77,6 +95,7 @@ public final class Tricks {
         boolean jumpDown = mc.options.keyJump.isDown() && usable;
         if (Config.SPACE_FLIPS.get() && jumpDown && !jumpWasDown && free) {
             tryStart(p, s, f < 0 ? Trick.BACKFLIP : Trick.FRONT_FLIP);
+            Tutorial.done(Tutorial.Step.FLIP);
         }
         jumpWasDown = jumpDown;
 
@@ -157,7 +176,12 @@ public final class Tricks {
 
         double horizontal = Math.sqrt(lastVel.x * lastVel.x + lastVel.z * lastVel.z);
         double impact = Math.max(horizontal, -lastVel.y);
-        if (impact > ROLL_IMPACT && !p.isInWater()) {
+        if (-lastVel.y > HERO_FALL_SPEED && horizontal < 1.0 && !p.isInWater()) {
+            // big drop straight down: superhero landing
+            setTrick(p, s, Trick.HERO_LANDING);
+            StyleScore.trick(Trick.HERO_LANDING, lastVel.length());
+            ClientFx.heroLanding(p);
+        } else if (impact > ROLL_IMPACT && !p.isInWater()) {
             setTrick(p, s, Trick.LANDING_ROLL);
             StyleScore.trick(Trick.LANDING_ROLL, lastVel.length());
         } else {
@@ -190,13 +214,41 @@ public final class Tricks {
     }
 
     private static void setTrick(Player p, AnimState s, Trick t) {
+        setTrick(p, s, t, Vec3.ZERO);
+    }
+
+    private static void setTrick(Player p, AnimState s, Trick t, Vec3 data) {
         s.trick = t;
         s.trickStart = p.tickCount;
-        send(t);
+        s.trickData = data;
+        PacketDistributor.sendToServer(new ActionPayload(ActionPayload.TRICK, t.ordinal(), data.x, data.y, data.z));
     }
 
     private static void send(Trick t) {
         PacketDistributor.sendToServer(new ActionPayload(ActionPayload.TRICK, t.ordinal(), 0, 0, 0));
+    }
+
+    /** Wall run pose on/off (from SwingClient). */
+    public static void wallRun(Player p, Vec3 wallNormal) {
+        AnimState s = AnimState.of(p);
+        queued = Trick.NONE;
+        setTrick(p, s, wallNormal == null ? Trick.NONE : Trick.WALL_RUN, wallNormal == null ? Vec3.ZERO : wallNormal);
+    }
+
+    /** Which way the drop is, if you're standing right at a ledge (null if not). */
+    private static Vec3 ledgeDirection(Player p) {
+        Vec3 look = p.getLookAngle();
+        Vec3 flat = new Vec3(look.x, 0, look.z);
+        if (flat.lengthSqr() < 1.0E-4) return null;
+        flat = flat.normalize();
+        Vec3 edge = p.position().add(flat.scale(0.7));
+        Level level = p.level();
+        BlockPos below = BlockPos.containing(edge.x, p.getY() - 0.5, edge.z);
+        for (int i = 0; i < 4; i++) {
+            BlockPos b = below.below(i);
+            if (!level.getBlockState(b).getCollisionShape(level, b).isEmpty()) return null;
+        }
+        return flat;
     }
 
     private Tricks() {}

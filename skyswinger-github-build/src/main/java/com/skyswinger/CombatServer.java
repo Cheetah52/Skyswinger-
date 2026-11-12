@@ -33,6 +33,7 @@ public final class CombatServer {
     public static void pull(Player player, int entityId) {
         if (!(player.level() instanceof ServerLevel level)) return;
         long now = level.getGameTime();
+        if (!Gear.hasShooter(player) || !Gear.hasFluid(player, Gear.PULL_COST)) return;
         Burst b = PULLS.computeIfAbsent(player.getUUID(), k -> new Burst(1, 25, 0));
         if (!b.tryUse(now)) return;
 
@@ -43,6 +44,7 @@ public final class CombatServer {
         double dist = target.distanceTo(player);
         if (dist > PULL_RANGE || !player.hasLineOfSight(target)) return;
 
+        Gear.useFluid(player, Gear.PULL_COST);
         Vec3 dir = player.getEyePosition().subtract(target.position()).normalize();
         double strength = Math.min(1.6, 0.45 + dist * 0.06);
         target.setDeltaMovement(dir.scale(strength).add(0, 0.35, 0));

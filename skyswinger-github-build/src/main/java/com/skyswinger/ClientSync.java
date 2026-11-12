@@ -33,6 +33,8 @@ public final class ClientSync {
         } else if (msg.kind() == ActionPayload.TRICK) {
             s.trick = Trick.byId(msg.value());
             s.trickStart = p.tickCount;
+            s.trickData = new Vec3(msg.x(), msg.y(), msg.z());
+            if (s.trick == Trick.HERO_LANDING) ClientFx.heroLanding(p);
         }
     }
 

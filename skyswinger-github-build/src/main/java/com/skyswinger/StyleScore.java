@@ -38,6 +38,7 @@ public final class StyleScore {
 
     private static boolean loaded;
     private static long total, best;
+    private static int tutorial;
 
     private static boolean active;
     private static double points;
@@ -53,6 +54,8 @@ public final class StyleScore {
     public static double multiplier() { return Math.min(MAX_MULT, 1.0 + 0.25 * chain); }
     public static long total() { load(); return total; }
     public static long best() { load(); return best; }
+    public static int tutorialStep() { load(); return tutorial; }
+    public static void setTutorialStep(int step) { load(); tutorial = step; save(); }
     public static Deque<Popup> popups() { return POPUPS; }
     public static Popup banner() { return banner; }
     public static Popup levelBanner() { return levelBanner; }
@@ -96,6 +99,7 @@ public final class StyleScore {
     /** Lock in the combo. */
     public static void bank() {
         if (!active) return;
+        if (points > 0) Tutorial.done(Tutorial.Step.BANK);
         load();
         long gained = Math.round(points * multiplier());
         int oldLevel = level();
@@ -171,6 +175,7 @@ public final class StyleScore {
             pr.load(r);
             total = Long.parseLong(pr.getProperty("total", "0"));
             best = Long.parseLong(pr.getProperty("best", "0"));
+            tutorial = Integer.parseInt(pr.getProperty("tutorial", "0"));
         } catch (Exception ignored) {
         }
     }
@@ -179,6 +184,7 @@ public final class StyleScore {
         Properties pr = new Properties();
         pr.setProperty("total", Long.toString(total));
         pr.setProperty("best", Long.toString(best));
+        pr.setProperty("tutorial", Integer.toString(tutorial));
         try (Writer w = Files.newBufferedWriter(file())) {
             pr.store(w, "Sky Swinger style progress");
         } catch (Exception ignored) {

@@ -23,7 +23,13 @@ public enum Trick {
     DIVE_SWING("Dive Swing", 120, 1, 1),
     WEB_PULL("Web Pull", 60, 1, 1),
     WEB_TRAP("Web Trap", 100, 1, 1),
-    SWING_KICK("Swing Kick", 150, 8, 1);
+    SWING_KICK("Swing Kick", 150, 8, 1),
+    // added in Update 4
+    WALL_RUN("Wall Run", 100, 0, 1),
+    WALL_KICK("Wall Kick", 80, 1, 1),
+    HERO_LANDING("Hero Landing", 120, 24, 1),
+    PERCH("Perch", 0, 0, 1),
+    WEB_COCOON("Web Cocoon", 200, 1, 1);
 
     public final String title;
     public final int points, duration, level;
@@ -42,7 +48,7 @@ public enum Trick {
 
     /** Points are given when the trick finishes (some moves score the moment they happen instead). */
     public boolean awardOnFinish() {
-        return this != LANDING_ROLL && this != SWING_KICK;
+        return this != LANDING_ROLL && this != SWING_KICK && this != HERO_LANDING;
     }
 
     public static Trick byId(int id) {
