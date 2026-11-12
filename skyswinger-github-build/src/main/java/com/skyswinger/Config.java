@@ -22,6 +22,7 @@ public final class Config {
     public static final ModConfigSpec.BooleanValue SMART_ANCHORS, WALL_RUN, DANGER_SENSE, CAMERA_TILT, WIND, SHOW_TUTORIAL;
     public static final ModConfigSpec.BooleanValue REQUIRE_SHOOTER, CARTRIDGES;
     public static final ModConfigSpec.BooleanValue UNLOCK_ALL;
+    public static final ModConfigSpec.BooleanValue REQUIRE_BITE, CAMERA_ROLL, INVERT_ROLL, WALL_CRAWL;
     public static final ModConfigSpec.DoubleValue FALL_REDUCTION;
     public static final ModConfigSpec.DoubleValue RELEASE_BOOST, GLIDE_SECONDS, GLIDE_KEEP;
     public static final ModConfigSpec.DoubleValue ZIP_SPEED, ZIP_COOLDOWN;
@@ -53,7 +54,8 @@ public final class Config {
         DIVE_BOOST = b.comment("Look straight down while falling to dive faster").define("diveBoost", true);
         SMART_ANCHORS = b.comment("Webs stick to tall buildings near you instead of the sky when there are any")
                 .define("smartAnchors", true);
-        WALL_RUN = b.comment("Swing into a wall at speed to run along it (Space to kick off)").define("wallRun", true);
+        WALL_RUN = b.comment("Hold Sprint on a wall to run along it (needs the Wall Run skill)").define("wallRun", true);
+        WALL_CRAWL = b.comment("Stick to walls and ceilings and crawl on them").define("wallCrawl", true);
         b.pop();
 
         b.push("tricks");
@@ -85,6 +87,9 @@ public final class Config {
                 .define("animations", true);
         SPEED_FOV = b.comment("Widen your view when you go fast").define("speedFov", true);
         CAMERA_TILT = b.comment("Camera leans into turns while swinging").define("cameraTilt", true);
+        CAMERA_ROLL = b.comment("Camera turns sideways on walls, upside down on ceilings and when you loop over a swing")
+                .define("cameraRoll", true);
+        INVERT_ROLL = b.comment("Flip the direction of the camera roll if it feels backwards").define("invertCameraRoll", false);
         WIND = b.comment("Wind streaks at the edges of the screen when you go fast").define("windStreaks", true);
         DANGER_SENSE = b.comment("Screen edge flashes when a mob or arrow is about to hit you").define("dangerSense", true);
         SHOW_TUTORIAL = b.comment("Show the tutorial tips (turn off and on again to restart them)").define("showTutorial", true);
@@ -107,6 +112,11 @@ public final class Config {
         SHOT_COOLDOWN = c.comment("Web shot cooldown in seconds").defineInRange("cooldownSeconds", 3.0, 0.0, 20.0);
         SHOT_DAMAGE = c.comment("Damage per web shot (1 = half a heart)").defineInRange("damage", 1.0, 0.0, 10.0);
         TRAP_SECONDS = c.comment("How long a charged web trap holds a mob").defineInRange("trapSeconds", 5.0, 1.0, 20.0);
+        c.pop();
+
+        c.push("spiderBite");
+        REQUIRE_BITE = c.comment("Players need to be bitten by a Strange Spider (or get /skyswinger bite) to have powers")
+                .define("requireBite", true);
         c.pop();
 
         c.push("webShooter");

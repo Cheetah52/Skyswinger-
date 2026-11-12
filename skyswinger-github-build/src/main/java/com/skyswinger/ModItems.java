@@ -4,6 +4,7 @@ import net.minecraft.world.item.CreativeModeTabs;
 import net.minecraft.world.item.Item;
 import net.neoforged.bus.api.IEventBus;
 import net.neoforged.neoforge.event.BuildCreativeModeTabContentsEvent;
+import net.neoforged.neoforge.common.DeferredSpawnEggItem;
 import net.neoforged.neoforge.registries.DeferredItem;
 import net.neoforged.neoforge.registries.DeferredRegister;
 
@@ -17,6 +18,8 @@ public final class ModItems {
             () -> new WebShooterItem(new Item.Properties().durability(SHOOTER_FLUID)));
     public static final DeferredItem<Item> WEB_CARTRIDGE = ITEMS.registerSimpleItem("web_cartridge",
             new Item.Properties().stacksTo(16));
+    public static final DeferredItem<DeferredSpawnEggItem> STRANGE_SPIDER_EGG = ITEMS.register("strange_spider_spawn_egg",
+            () -> new DeferredSpawnEggItem(ModEntities.STRANGE_SPIDER, 0x1B1F3A, 0xD6303A, new Item.Properties()));
 
     public static void register(IEventBus modBus) {
         ITEMS.register(modBus);
@@ -28,6 +31,7 @@ public final class ModItems {
             event.accept(WEB_SHOOTER.get());
             event.accept(WEB_CARTRIDGE.get());
         }
+        if (event.getTabKey() == CreativeModeTabs.SPAWN_EGGS) event.accept(STRANGE_SPIDER_EGG.get());
     }
 
     private ModItems() {}

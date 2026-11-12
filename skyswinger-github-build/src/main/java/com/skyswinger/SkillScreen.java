@@ -16,7 +16,7 @@ import net.minecraft.world.item.Items;
  * Click a skill to unlock it with a skill point. A skill needs the one above it first.
  */
 public class SkillScreen extends Screen {
-    private static final int NODE = 22, COL_GAP = 36, ROW_GAP = 36, BRANCH_GAP = 14;
+    private static final int NODE = 22, COL_GAP = 32, ROW_GAP = 36, BRANCH_GAP = 12;
     private static final int OWNED = 0xFF7CFF8A, AVAILABLE = 0xFFFFD36A, LOCKED = 0xFF404850;
 
     private int left, top;
@@ -27,7 +27,7 @@ public class SkillScreen extends Screen {
 
     @Override
     protected void init() {
-        int width = 8 * COL_GAP + 2 * BRANCH_GAP;
+        int width = 9 * COL_GAP + 2 * BRANCH_GAP;
         left = (this.width - width) / 2 + (COL_GAP - NODE) / 2;
         top = Math.max(58, (this.height - 4 * ROW_GAP) / 2 + 10);
     }
@@ -166,6 +166,8 @@ public class SkillScreen extends Screen {
             case WEB_BURST -> Items.FIREWORK_STAR;
             case BIG_TANK -> ModItems.WEB_CARTRIDGE.get();
             case QUICK_RELOAD -> Items.CLOCK;
+            case ZIP_VAULT -> Items.SLIME_BALL;
+            case SLINGSHOT_ZIP -> Items.BOW;
         });
     }
 }

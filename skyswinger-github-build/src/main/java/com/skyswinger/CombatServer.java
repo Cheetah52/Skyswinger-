@@ -35,7 +35,7 @@ public final class CombatServer {
     public static void pull(Player player, int entityId) {
         if (!(player.level() instanceof ServerLevel level)) return;
         long now = level.getGameTime();
-        if (!Gear.hasShooter(player) || !Gear.hasFluid(player, Gear.PULL_COST)) return;
+        if (!Gear.hasShooter(player) || !Gear.hasFluid(player, Gear.PULL_COST) || !BiteServer.powered(player)) return;
         if (!SkillServer.has(player, Skill.WEB_PULL)) return;
         Burst b = PULLS.computeIfAbsent(player.getUUID(), k -> new Burst(1, 25, 0));
         b.configure(1, Gear.cooldown(25, SkillServer.has(player, Skill.QUICK_RELOAD)));
@@ -61,7 +61,7 @@ public final class CombatServer {
     /** Swing into a mob: damage and knockback based on how fast you were going. */
     public static void kick(Player player, int entityId, float speed) {
         if (!(player.level() instanceof ServerLevel level)) return;
-        if (!SkillServer.has(player, Skill.SWING_KICK)) return;
+        if (!SkillServer.has(player, Skill.SWING_KICK) || !BiteServer.powered(player)) return;
         long now = level.getGameTime();
         Burst b = KICKS.computeIfAbsent(player.getUUID(), k -> new Burst(1, 8, 0));
         if (!b.tryUse(now)) return;
@@ -96,7 +96,7 @@ public final class CombatServer {
     /** Webs in every direction: every mob close by gets webbed and slowed. */
     public static void burst(Player player) {
         if (!(player.level() instanceof ServerLevel level)) return;
-        if (!SkillServer.has(player, Skill.WEB_BURST) || !Gear.hasShooter(player)) return;
+        if (!SkillServer.has(player, Skill.WEB_BURST) || !Gear.hasShooter(player) || !BiteServer.powered(player)) return;
         int cost = Gear.burstCost(SkillServer.has(player, Skill.BIG_TANK));
         if (!Gear.hasFluid(player, cost)) return;
         Burst b = BURSTS.computeIfAbsent(player.getUUID(), k -> new Burst(1, BURST_COOLDOWN, 0));
@@ -122,7 +122,7 @@ public final class CombatServer {
     /** Landing a web slam: knock back and hurt mobs around you. */
     public static void slam(Player player, float power) {
         if (!(player.level() instanceof ServerLevel level)) return;
-        if (!SkillServer.has(player, Skill.WEB_SLAM)) return;
+        if (!SkillServer.has(player, Skill.WEB_SLAM) || !BiteServer.powered(player)) return;
         float p = Math.max(0.5f, Math.min(power, 3.0f));
         for (LivingEntity e : level.getEntitiesOfClass(LivingEntity.class, player.getBoundingBox().inflate(SLAM_RANGE, 2.0, SLAM_RANGE),
                 x -> x != player && x.isAlive())) {

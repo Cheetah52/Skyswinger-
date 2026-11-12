@@ -14,7 +14,7 @@ import net.neoforged.neoforge.network.handling.IPayloadContext;
  * The server uses it for fall-damage protection and passes it on to nearby players so they can see it.
  */
 public record ActionPayload(int kind, int value, double x, double y, double z) implements CustomPacketPayload {
-    public static final int WEB = 0, TRICK = 1;
+    public static final int WEB = 0, TRICK = 1, SHOT = 2;
     private static final double SHARE_RANGE = 160.0;
 
     public static final Type<ActionPayload> TYPE =
@@ -35,7 +35,8 @@ public record ActionPayload(int kind, int value, double x, double y, double z) i
     public static void handle(ActionPayload msg, IPayloadContext ctx) {
         ctx.enqueueWork(() -> {
             if (!(ctx.player() instanceof ServerPlayer sp)) return;
-            if (msg.kind() == WEB) SwingServer.setSwinging(sp, msg.value() != 0);
+            if (!BiteServer.powered(sp)) return;
+            if (msg.kind() == WEB) SwingServer.setSwinging(sp, (msg.value() & 7) != 0);
 
             ActionSync out = new ActionSync(sp.getId(), msg.kind(), msg.value(), msg.x(), msg.y(), msg.z());
             for (ServerPlayer other : sp.serverLevel().players()) {

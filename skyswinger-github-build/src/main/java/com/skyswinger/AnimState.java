@@ -14,6 +14,11 @@ public final class AnimState {
     public int mode = NONE;
     public Vec3 target;
     public long attachTime;
+    public boolean leftHand;           // which hand the web is in
+
+    public Vec3 shotTarget;            // last web shot (for the arm animation and the web line)
+    public long shotTime = -1000;
+    public boolean shotLeft;
 
     public Trick trick = Trick.NONE;
     public int trickStart;

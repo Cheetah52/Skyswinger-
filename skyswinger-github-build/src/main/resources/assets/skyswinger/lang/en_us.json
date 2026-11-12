@@ -80,7 +80,7 @@
   "skyswinger.configuration.smartAnchors": "Smart Anchors",
   "skyswinger.configuration.smartAnchors.tooltip": "Webs stick to tall buildings near you instead of the sky when there are any.",
   "skyswinger.configuration.wallRun": "Wall Run",
-  "skyswinger.configuration.wallRun.tooltip": "Swing into a wall at speed to run along it. Press Space to kick off.",
+  "skyswinger.configuration.wallRun.tooltip": "Hold Sprint on a wall to run along it (needs the Wall Run skill).",
   "skyswinger.configuration.cameraTilt": "Camera Tilt",
   "skyswinger.configuration.cameraTilt.tooltip": "The camera leans into turns while you swing.",
   "skyswinger.configuration.windStreaks": "Wind Streaks",
@@ -98,5 +98,16 @@
   "skyswinger.configuration.fallDamageReduction.tooltip": "How much less fall damage you take with a Web Shooter. 0.75 means 75% less.",
   "key.skyswinger.skills": "Abilities / Skill Tree",
   "skyswinger.configuration.unlockAllSkills": "Unlock All Skills",
-  "skyswinger.configuration.unlockAllSkills.tooltip": "Unlock every skill for testing. Creative mode always has everything."
+  "skyswinger.configuration.unlockAllSkills.tooltip": "Unlock every skill for testing. Creative mode always has everything.",
+  "entity.skyswinger.strange_spider": "Strange Spider",
+  "item.skyswinger.strange_spider_spawn_egg": "Strange Spider Spawn Egg",
+  "skyswinger.configuration.wallCrawl": "Wall Crawl",
+  "skyswinger.configuration.wallCrawl.tooltip": "Stick to walls and ceilings and crawl on them.",
+  "skyswinger.configuration.cameraRoll": "Camera Roll",
+  "skyswinger.configuration.cameraRoll.tooltip": "Camera turns sideways on walls, upside down on ceilings, and when you loop over a swing.",
+  "skyswinger.configuration.invertCameraRoll": "Flip Camera Roll",
+  "skyswinger.configuration.invertCameraRoll.tooltip": "Turn this on if the camera rolls the wrong way.",
+  "skyswinger.configuration.spiderBite": "Spider Bite",
+  "skyswinger.configuration.requireBite": "Need Spider Bite",
+  "skyswinger.configuration.requireBite.tooltip": "Players need to be bitten by a Strange Spider (or /skyswinger bite) to have powers."
 }

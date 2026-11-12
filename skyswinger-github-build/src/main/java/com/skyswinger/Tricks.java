@@ -43,14 +43,14 @@ public final class Tricks {
         int age = p.tickCount;
         boolean onGround = p.onGround() || p.isInWater() || p.getAbilities().flying || p.isFallFlying();
         boolean free = !onGround && !SwingClient.isSwinging() && !SwingClient.isZipping()
-                && !SwingClient.isWallRunning() && !SwingClient.isSlamming();
+                && !SwingClient.isOnWall() && !SwingClient.isSlamming();
         double lastSpeed = lastVel.length();
 
         // ---- losing the combo ----
         boolean hurt = p.hurtTime > 0;
         if (hurt && !wasHurt) StyleScore.crash();
         wasHurt = hurt;
-        if (p.horizontalCollision && !onGround && lastSpeed > WALL_CRASH_SPEED && !SwingClient.isWallRunning()) {
+        if (p.horizontalCollision && !onGround && lastSpeed > WALL_CRASH_SPEED && !SwingClient.isOnWall()) {
             StyleScore.crash();
         }
 
@@ -287,11 +287,11 @@ public final class Tricks {
         setTrick(p, s, t);
     }
 
-    /** Wall run pose on/off (from SwingClient). */
-    public static void wallRun(Player p, Vec3 wallNormal) {
+    /** Wall crawl / wall run pose (with which way the surface faces), or NONE to clear. From SwingClient. */
+    public static void surfacePose(Player p, Trick t, Vec3 normal) {
         AnimState s = AnimState.of(p);
         queued = Trick.NONE;
-        setTrick(p, s, wallNormal == null ? Trick.NONE : Trick.WALL_RUN, wallNormal == null ? Vec3.ZERO : wallNormal);
+        setTrick(p, s, t, normal);
     }
 
     /** Which way the drop is, if you're standing right at a ledge (null if not). */

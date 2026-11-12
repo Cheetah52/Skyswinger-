@@ -49,7 +49,7 @@ public final class WebShotServer {
     public static void fire(Player player, boolean charged) {
         if (!(player.level() instanceof ServerLevel level)) return;
         long now = level.getGameTime();
-        if (!Gear.hasShooter(player)) return;
+        if (!Gear.hasShooter(player) || !BiteServer.powered(player)) return;
         if (charged && !SkillServer.has(player, Skill.WEB_TRAP)) charged = false; // not unlocked: normal shot
         boolean quick = SkillServer.has(player, Skill.QUICK_RELOAD);
         int cost = charged ? Gear.trapCost(SkillServer.has(player, Skill.BIG_TANK)) : Gear.SHOT_COST;

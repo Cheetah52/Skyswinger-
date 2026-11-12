@@ -23,7 +23,7 @@ import net.neoforged.fml.loading.FMLPaths;
  * - Mixing tricks up is worth more than repeating one.
  */
 public final class StyleScore {
-    public static final int MAX_LEVEL = 20;
+    public static final int MAX_LEVEL = 22;
     public static final int WHITE = 0xFFFFFF, GOLD = 0xFFD36A, GREEN = 0x7CFF8A, RED = 0xFF6A5A, GRAY = 0xB0B8C0;
 
     private static final String[] WORDS = {"Nice!", "Great!", "Awesome!", "Amazing!", "Spectacular!", "Unstoppable!"};

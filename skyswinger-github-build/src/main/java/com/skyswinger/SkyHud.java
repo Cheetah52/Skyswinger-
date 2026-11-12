@@ -60,11 +60,17 @@ public final class SkyHud {
         boolean tutorialOn = Config.SHOW_TUTORIAL.get();
         if (tutorialOn && !tutorialWasOn) Tutorial.restart(); // turned back on: start over
         tutorialWasOn = tutorialOn;
-        Tutorial.draw(g, mc.font, now);
+        boolean powered = Powers.active(p);
+        Tutorial.draw(g, mc.font, now, powered);
+        if (!powered) {
+            alpha = 0;
+            return; // no spider powers: no HUD
+        }
 
         if (Config.SHOW_SCORE.get()) drawScore(g, mc.font, now);
         drawTrapCharge(g, mc.font, now);
         drawLeapCharge(g, mc.font);
+        drawSlingCharge(g, mc.font);
         if (!Config.SHOW_HUD.get()) {
             alpha = 0;
             return;
@@ -258,6 +264,17 @@ public final class SkyHud {
                 }
             }
         }
+    }
+
+    /** Slingshot zip pull-back bar under the crosshair while you hold Z. */
+    private static void drawSlingCharge(GuiGraphics g, Font font) {
+        float c = SwingClient.slingCharge();
+        if (c <= 0f) return;
+        int cx = g.guiWidth() / 2, cy = g.guiHeight() / 2 + 9;
+        int w = 26;
+        g.fill(cx - w / 2, cy, cx + w / 2, cy + 3, 0x88000000);
+        g.fill(cx - w / 2, cy, cx - w / 2 + Math.round(w * c), cy + 3, 0xFF000000 | (c >= 1f ? StyleScore.GOLD : 0x9FE0FF));
+        if (c >= 1f) g.drawCenteredString(font, "SLINGSHOT", cx, cy + 5, 0xFF000000 | StyleScore.GOLD);
     }
 
     /** Charged leap bar under the crosshair while you hold Sneak. */

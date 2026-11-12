@@ -15,16 +15,25 @@ public final class ClientSync {
         AnimState s = AnimState.of(p);
         long now = mc.level.getGameTime();
 
+        if (msg.kind() == ActionPayload.SHOT) {
+            s.shotTarget = new Vec3(msg.x(), msg.y(), msg.z());
+            s.shotTime = now;
+            s.shotLeft = msg.value() == 1;
+            return;
+        }
         if (msg.kind() == ActionPayload.WEB) {
-            if (msg.value() == AnimState.NONE) {
+            int mode = msg.value() & 7;
+            boolean left = (msg.value() & 8) != 0;
+            if (mode == AnimState.NONE) {
                 if (s.mode != AnimState.NONE && s.target != null && Config.WEB_FADE.get()) {
                     s.looseFrom = s.target;
-                    s.looseTo = SwingClient.handPos(p, 1.0f);
+                    s.looseTo = SwingClient.handFor(p, 1.0f, s.leftHand);
                     s.looseTime = now;
                 }
                 s.mode = AnimState.NONE;
             } else {
-                s.mode = msg.value();
+                s.mode = mode;
+                s.leftHand = left;
                 s.target = new Vec3(msg.x(), msg.y(), msg.z());
                 s.attachTime = now;
                 mc.level.playLocalSound(p.getX(), p.getY(), p.getZ(), SwingClient.SFX_THWIP, SoundSource.PLAYERS,

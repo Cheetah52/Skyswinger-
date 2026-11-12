@@ -126,11 +126,28 @@ public final class SwingClient {
     private static long pullStart, pullUntil;
     private static final Map<Integer, Long> KICKED = new HashMap<>();
 
-    private static int wallRunTicks, wallRunAge;
-    private static Vec3 wallNormal, wallDir;
-    private static double wallSpeed;
-    private static boolean wallJumpWasDown = true;
     private static Vec3 prevVel = Vec3.ZERO;
+
+    // ---- wall crawl / wall run (Update 6) ----
+    private static final double CRAWL_SPEED = 0.15, WALL_RUN_SPEED = 0.45;
+    private static final Vec3 UP = new Vec3(0, 1, 0), DOWN = new Vec3(0, -1, 0);
+    private static boolean crawling, wallRunning, crawlJumpWasDown = true;
+    private static Vec3 crawlN = UP;                 // the surface's normal (points away from the wall/ceiling)
+    private static Vec3 lastCrawlMove = Vec3.ZERO;
+    private static int crawlCooldown, crawlAge, wallPushTicks, wallRunTime;
+
+    // ---- swing extras ----
+    private static boolean useLeft, caught, aboveTop, swingKeyWasDown;
+    private static int whips;
+    private static double spinAngle, lastSpinAngle;
+
+    // ---- zip extras ----
+    private static final int SLING_TICKS = 10;      // hold Z this long for a slingshot zip
+    private static int zipHeld = -1, zipChain;
+    private static long lastZipEnd = -100;
+    private static boolean zipSling, zipJumpWasDown = true;
+    private static Vec3 zipNormal;                   // face of the block you zipped to (for sticking to it)
+    private static boolean shotLeft;
 
     private static Vec3 shotEnd;
     private static long shotUntil;
@@ -144,16 +161,23 @@ public final class SwingClient {
     private static ClientLevel lastLevel;
     private static int curAlpha = 255;
 
-    private record Aim(Vec3 point, boolean hit) {}
+    private record Aim(Vec3 point, boolean hit, Vec3 normal) {}
 
     // ======== used by the HUD, sounds and animations ========
     public static boolean isSwinging() { return anchor != null; }
     public static boolean isZipping() { return zipTarget != null; }
     public static boolean isMoving() {
-        return anchor != null || zipTarget != null || glideTicks > 0 || diving || wallRunTicks > 0 || gliding || slamming;
+        return anchor != null || zipTarget != null || glideTicks > 0 || diving || crawling || gliding || slamming;
     }
     public static boolean isDiving() { return diving; }
-    public static boolean isWallRunning() { return wallRunTicks > 0; }
+    public static boolean isWallRunning() { return crawling && wallRunning; }
+    public static boolean isOnWall() { return crawling; }
+    public static Vec3 wallNormal() { return crawlN; }
+    public static boolean usingLeftHand() { return useLeft; }
+    /** 0..1 how pulled back the slingshot zip is (0 = not charging). */
+    public static float slingCharge() {
+        return zipHeld < 3 || !StyleScore.has(Skill.SLINGSHOT_ZIP) ? 0f : Math.min(1f, zipHeld / (float) SLING_TICKS);
+    }
     public static boolean isSlamming() { return slamming; }
     public static boolean isGliding() { return gliding; }
     /** 0..1 how charged the charged leap is (0 = not charging). */
@@ -236,6 +260,13 @@ public final class SwingClient {
             if (mc.screen == null) mc.setScreen(new SkillScreen());
         }
 
+        // no spider bite = no powers
+        if (!Powers.active(player)) {
+            powerDown(player);
+            return;
+        }
+        if (crawlCooldown > 0) crawlCooldown--;
+
         // Web XP for swinging around
         if (isMoving() && !player.onGround()) {
             Vec3 d = player.getDeltaMovement();
@@ -248,11 +279,11 @@ public final class SwingClient {
         if (player.onGround() || player.isInWater()) glideAirTicks = 0;
 
         handleShootKey(player, usable);
-        while (ClientKeys.ZIP.consumeClick()) { if (usable) startZip(player); }
+        handleZipKey(player, usable);
         while (ClientKeys.LAUNCH.consumeClick()) { if (usable) startLaunch(player); }
         while (ClientKeys.PULL.consumeClick()) { if (usable) webPull(player); }
         DangerSense.tick(player);
-        if (usable && wallRunTicks == 0) tryStartWallRun(player);
+        if (usable && !crawling) tryStartCrawl(player, mc);
         Tricks.tick(player, mc);
         if (usable) checkKick(player);
         chargedLeap(player, mc, usable);
@@ -261,19 +292,36 @@ public final class SwingClient {
             prevVel = player.getDeltaMovement();
             return;
         }
-        if (wallRunTicks > 0) {
-            wallRunTick(player, mc, usable);
-            prevVel = player.getDeltaMovement();
-            return;
+        boolean swingKey = ClientKeys.SWING.isDown() && usable;
+        boolean swingPressed = swingKey && !swingKeyWasDown;
+        if (crawling) {
+            crawlTick(player, mc, usable, swingPressed);
+            if (crawling) {
+                swingKeyWasDown = swingKey;
+                prevVel = player.getDeltaMovement();
+                return;
+            }
         }
 
         if (zipTarget != null) {
-            if (!usable) endZip(player); else doZip(player);
-            prevVel = player.getDeltaMovement();
-            return;
+            if (!usable) endZip(player);
+            else if (swingPressed && zipTicks > 2 && !zipLaunch) {
+                // zip into swing: keep all the zip speed
+                Vec3 keep = player.getDeltaMovement();
+                endZip(player);
+                player.setDeltaMovement(keep);
+                if (canWeb(player, 0)) attach(player);
+            } else {
+                doZip(player, mc, usable);
+            }
+            if (zipTarget != null) {
+                swingKeyWasDown = swingKey;
+                prevVel = player.getDeltaMovement();
+                return;
+            }
         }
 
-        boolean wants = ClientKeys.SWING.isDown() && usable;
+        boolean wants = swingKey;
         if (wants && anchor == null) {
             if (canWeb(player, 0)) attach(player);
         } else if (!wants && anchor != null) {
@@ -290,7 +338,30 @@ public final class SwingClient {
             webGlide(player, usable);
             if (!gliding) dive(player);
         }
+        swingKeyWasDown = swingKey;
         prevVel = player.getDeltaMovement();
+    }
+
+    /** Lost (or never had) powers: stop everything and ignore the keys. */
+    private static void powerDown(Player p) {
+        if (anchor != null) {
+            anchor = null;
+            sendWeb(p, AnimState.NONE, null);
+        }
+        if (zipTarget != null) {
+            zipTarget = null;
+            sendWeb(p, AnimState.NONE, null);
+        }
+        if (crawling) endCrawl(p);
+        gliding = slamming = diving = false;
+        glideTicks = 0;
+        shootHeld = 0;
+        zipHeld = -1;
+        while (ClientKeys.SHOOT.consumeClick()) { }
+        while (ClientKeys.ZIP.consumeClick()) { }
+        while (ClientKeys.LAUNCH.consumeClick()) { }
+        while (ClientKeys.PULL.consumeClick()) { }
+        while (ClientKeys.TRICK.consumeClick()) { }
     }
 
     // ======== aiming ========
@@ -304,9 +375,11 @@ public final class SwingClient {
         AABB box = p.getBoundingBox().expandTowards(look.scale(range)).inflate(1.0);
         EntityHitResult eh = ProjectileUtil.getEntityHitResult(p.level(), p, eye, end, box,
                 e -> e instanceof LivingEntity && e != p && e.isAlive() && !e.isSpectator() && e.isPickable());
-        if (eh != null && eye.distanceToSqr(eh.getLocation()) <= maxSq) return new Aim(eh.getLocation(), true);
-        if (bh.getType() != HitResult.Type.MISS) return new Aim(bh.getLocation(), true);
-        return new Aim(end, false);
+        if (eh != null && eye.distanceToSqr(eh.getLocation()) <= maxSq) return new Aim(eh.getLocation(), true, null);
+        if (bh.getType() != HitResult.Type.MISS) {
+            return new Aim(bh.getLocation(), true, Vec3.atLowerCornerOf(bh.getDirection().getNormal()));
+        }
+        return new Aim(end, false, null);
     }
 
     /** Web Shooter check (survival). Shows a tip if you can't. */
@@ -380,6 +453,7 @@ public final class SwingClient {
         playSfx(p, SFX_SHOT, 0.3f, 1.2f);
         playSfx(p, SFX_SPIT, 0.25f, 1.2f);
         if (onMob) StyleScore.trick(Trick.WEB_TRAP, p.getDeltaMovement().length());
+        shareShot(p, shotEnd, now);
         PacketDistributor.sendToServer(new WebShotPayload(true));
     }
 
@@ -394,18 +468,63 @@ public final class SwingClient {
         playSfx(p, SFX_SHOT, 0.2f, 1.9f);
         playSfx(p, SFX_SPIT, 0.12f, 1.8f);
         StyleScore.xp(0.5);
+        shareShot(p, shotEnd, now);
         PacketDistributor.sendToServer(new WebShotPayload(false));
     }
 
+    /** Shots alternate hands, and your friends see them (arm animation + web line). */
+    private static void shareShot(Player p, Vec3 target, long now) {
+        shotLeft = !shotLeft;
+        AnimState s = AnimState.of(p);
+        s.shotTarget = target;
+        s.shotTime = now;
+        s.shotLeft = shotLeft;
+        PacketDistributor.sendToServer(new ActionPayload(ActionPayload.SHOT, shotLeft ? 1 : 0, target.x, target.y, target.z));
+    }
+
     // ======== web zip ========
-    private static void startZip(Player p) {
+    /** Tap Z to zip. With Slingshot Zip unlocked, hold Z to pull back and let go to launch. */
+    private static void handleZipKey(Player p, boolean usable) {
+        while (ClientKeys.ZIP.consumeClick()) { } // we watch the key being held instead
+        boolean down = ClientKeys.ZIP.isDown() && usable;
+        boolean sling = StyleScore.has(Skill.SLINGSHOT_ZIP);
+        if (down) {
+            if (zipHeld < 0) {
+                zipHeld = 0;
+                if (!sling) startZip(p, false);
+            } else {
+                zipHeld++;
+            }
+        } else if (zipHeld >= 0) {
+            if (sling) startZip(p, zipHeld >= SLING_TICKS);
+            zipHeld = -1;
+        }
+    }
+
+    private static void startZip(Player p, boolean slingshot) {
         if (!canWeb(p, 0)) return;
         long now = p.level().getGameTime();
-        if (!ZIP_BURST.tryUse(now)) return;
+        // zip chaining: zip again right as you arrive (or just after) for a free, faster zip
+        boolean perfect = (zipTarget != null && zipTarget.distanceTo(center(p)) < 5.0) || now - lastZipEnd <= 6;
+        if (perfect) {
+            zipChain = Math.min(zipChain + 1, 4);
+            StyleScore.trick(Trick.PERFECT_ZIP, p.getDeltaMovement().length());
+        } else {
+            if (!ZIP_BURST.tryUse(now)) return;
+            zipChain = 0;
+        }
         Tutorial.done(Tutorial.Step.ZIP);
         StyleScore.xp(1);
-        Aim a = aim(p, ZIP_RANGE);
-        beginZip(p, a.hit() ? a.point() : p.getEyePosition().add(p.getLookAngle().scale(ZIP_AIR_DISTANCE)), false, null);
+        double range = slingshot ? ZIP_RANGE * 1.6 : ZIP_RANGE;
+        Aim a = aim(p, range);
+        Vec3 target = a.hit() ? a.point() : p.getEyePosition().add(p.getLookAngle().scale(ZIP_AIR_DISTANCE * (slingshot ? 1.6 : 1.0)));
+        beginZip(p, target, false, null);
+        zipNormal = a.normal();
+        zipSling = slingshot;
+        if (slingshot) {
+            playSfx(p, SFX_LAUNCH, 0.4f, 1.1f);
+            StyleScore.trick(Trick.SLINGSHOT_ZIP, p.getDeltaMovement().length());
+        }
     }
 
     /** Point launch: zip to the top edge of the block you're aiming at, then get flung up off it. */
@@ -438,9 +557,13 @@ public final class SwingClient {
         anchor = null; // cancels any swing
         doubleWeb = false;
         glideTicks = 0;
+        if (crawling) endCrawl(p);
         zipTarget = target;
         zipLaunch = launch;
         zipEntity = follow;
+        zipNormal = null;
+        zipSling = false;
+        zipJumpWasDown = true;
         zipTicks = 0;
         zipStart = now;
         playSfx(p, SFX_THWIP, 0.3f, 2.0f);
@@ -450,24 +573,62 @@ public final class SwingClient {
         sendWeb(p, AnimState.ZIP, zipTarget); // also fall-damage protection
     }
 
-    private static void doZip(Player p) {
+    private static void doZip(Player p, Minecraft mc, boolean usable) {
         if (zipEntity != null) {
             if (!zipEntity.isAlive() || zipEntity.isRemoved()) zipEntity = null;
             else zipTarget = zipEntity.position().add(0, zipEntity.getBbHeight() * 0.5, 0);
         }
         Vec3 to = zipTarget.subtract(center(p));
         double d = to.length();
+        Vec3 dir = d > 1.0E-4 ? to.scale(1.0 / d) : Vec3.ZERO;
+
+        // zip vault: press Space as you arrive
+        boolean jump = mc.options.keyJump.isDown() && usable;
+        boolean jumpPressed = jump && !zipJumpWasDown;
+        zipJumpWasDown = jump;
+        if (jumpPressed && d < 5.0 && !zipLaunch) {
+            if (StyleScore.has(Skill.ZIP_VAULT)) {
+                zipVault(p, dir);
+                return;
+            }
+            StyleScore.locked(Skill.ZIP_VAULT);
+        }
+
         if (d < 2.2 || ++zipTicks > ZIP_MAX_TICKS) {
             if (zipLaunch) {
                 launchOff(p);
                 return;
             }
+            Vec3 face = zipNormal;
+            boolean sling = zipSling;
             endZip(p);
+            if (sling) {
+                // slingshot: fly on past the target
+                p.setDeltaMovement(dir.scale(Config.ZIP_SPEED.get() * 1.3).add(0, 0.5, 0));
+                glideTotal = Config.ticks(Config.GLIDE_SECONDS);
+                glideTicks = glideTotal;
+            } else if (face != null && face.y < 0.5 && Config.WALL_CRAWL.get()) {
+                // zipped to a wall or ceiling: stick to it
+                startCrawl(p, face);
+            }
             return;
         }
-        p.setDeltaMovement(to.scale(1.0 / d).scale(Config.ZIP_SPEED.get()));
+        double speed = Config.ZIP_SPEED.get() * (1.0 + 0.12 * zipChain) * (zipSling ? 1.8 : 1.0);
+        p.setDeltaMovement(dir.scale(speed));
         p.fallDistance = 0;
         trail(p);
+    }
+
+    /** Vault up and over whatever you zipped to, with a flip. */
+    private static void zipVault(Player p, Vec3 dir) {
+        endZip(p);
+        Vec3 flat = new Vec3(dir.x, 0, dir.z);
+        flat = flat.lengthSqr() < 1.0E-4 ? Vec3.ZERO : flat.normalize();
+        p.setDeltaMovement(flat.x * 0.6, 1.05, flat.z * 0.6);
+        glideTotal = Config.ticks(Config.GLIDE_SECONDS);
+        glideTicks = glideTotal;
+        playSfx(p, SFX_LAUNCH, 0.3f, 1.5f);
+        Tricks.pose(p, Trick.ZIP_VAULT);
     }
 
     /** Arrived at the ledge: fling up and forward. */
@@ -492,7 +653,11 @@ public final class SwingClient {
         zipTarget = null;
         zipLaunch = false;
         zipEntity = null;
-        p.setDeltaMovement(p.getDeltaMovement().scale(0.8));
+        zipSling = false;
+        lastZipEnd = p.level().getGameTime();
+        // keep your momentum (zips no longer slow you down at the end)
+        glideTotal = Config.ticks(Config.GLIDE_SECONDS);
+        glideTicks = glideTotal;
         sendWeb(p, AnimState.NONE, null);
     }
 
@@ -501,6 +666,12 @@ public final class SwingClient {
         boolean grounded = p.onGround();
         boolean fromDive = diving && p.getDeltaMovement().length() > 1.8;
         doubleWeb = false;
+        useLeft = !useLeft;        // webs alternate hands
+        caught = false;
+        aboveTop = false;
+        whips = 0;
+        spinAngle = 0;
+        lastSpinAngle = Double.NaN;
         Vec3 eye = p.getEyePosition();
         Vec3 look = p.getLookAngle();
         Vec3 target = null;
@@ -514,8 +685,11 @@ public final class SwingClient {
         }
         if (target == null && Config.SMART_ANCHORS.get()) target = smartAnchor(p);
         if (target == null) {
+            // aim the web where you're heading, not just where you're looking
             Vec3 flat = new Vec3(look.x, 0, look.z);
             flat = flat.lengthSqr() < 1.0E-4 ? Vec3.directionFromRotation(0, p.getYRot()) : flat.normalize();
+            Vec3 vel = new Vec3(p.getDeltaMovement().x, 0, p.getDeltaMovement().z);
+            if (vel.length() > 0.5) flat = flat.scale(0.6).add(vel.normalize().scale(0.4)).normalize();
             target = eye.add(flat.scale(SKY_FORWARD)).add(0, Config.ANCHOR_HEIGHT.get(), 0);
         }
 
@@ -524,8 +698,8 @@ public final class SwingClient {
         glideTicks = 0;
         ropeLength = Mth.clamp(center(p).distanceTo(anchor), MIN_ROPE, MAX_ROPE);
         attachTime = p.level().getGameTime();
-        // "thwip"
-        playSfx(p, SFX_THWIP, 0.3f, 1.9f);
+        // "thwip" (a slightly different pitch for each hand)
+        playSfx(p, SFX_THWIP, 0.3f, useLeft ? 1.75f : 1.95f);
         playSfx(p, SFX_SPIT, 0.15f, 1.7f);
         startWhoosh(p);
         Tricks.onWebAttach(p, fromDive);
@@ -574,13 +748,22 @@ public final class SwingClient {
     }
 
     private static void release(Player p) {
+        Vec3 anchorBefore = anchor;
         letGo(p, anchor, 250, 250, 255);
         anchor = null;
         doubleWeb = false;
         glideTotal = Config.ticks(Config.GLIDE_SECONDS);
         glideTicks = glideTotal;
         double speed = p.getDeltaMovement().length();
-        p.setDeltaMovement(p.getDeltaMovement().scale(Config.RELEASE_BOOST.get()));
+        double boost = Config.RELEASE_BOOST.get();
+        // perfect release: let go near the bottom of the swing while moving forward/up
+        Vec3 ropeDir = anchorBefore.subtract(center(p)).normalize();
+        if (ropeDir.y > 0.85 && p.getDeltaMovement().y > -0.1 && speed > 1.0) {
+            boost *= 1.12;
+            StyleScore.trick(Trick.PERFECT_RELEASE, speed);
+            playSfx(p, SFX_LAUNCH, 0.25f, 1.8f);
+        }
+        p.setDeltaMovement(p.getDeltaMovement().scale(boost));
         sendWeb(p, AnimState.NONE, null);
         Tricks.onRelease(p, speed);
         Tutorial.done(Tutorial.Step.RELEASE);
@@ -590,12 +773,13 @@ public final class SwingClient {
     private static void sendWeb(Player p, int mode, Vec3 target) {
         AnimState s = AnimState.of(p);
         s.mode = mode;
+        s.leftHand = useLeft;
         if (target != null) {
             s.target = target;
             s.attachTime = p.level().getGameTime();
         }
         Vec3 t = target == null ? Vec3.ZERO : target;
-        PacketDistributor.sendToServer(new ActionPayload(ActionPayload.WEB, mode, t.x, t.y, t.z));
+        PacketDistributor.sendToServer(new ActionPayload(ActionPayload.WEB, mode | (useLeft ? 8 : 0), t.x, t.y, t.z));
     }
 
     /** Where a web leaves a player's hand. */
@@ -603,11 +787,16 @@ public final class SwingClient {
         return hand(p, pt);
     }
 
+    /** Right hand or left hand. */
+    public static Vec3 handFor(Player p, float pt, boolean left) {
+        return left ? otherHand(p, pt) : hand(p, pt);
+    }
+
     /** Leave the web behind so it can go slack and fade instead of vanishing. */
     private static void letGo(Player p, Vec3 stuckAt, int r, int g, int b) {
         if (stuckAt == null || !Config.WEB_FADE.get()) return;
         looseFrom = stuckAt;
-        looseTo = hand(p, 1.0f);
+        looseTo = handFor(p, 1.0f, useLeft);
         looseVel = p.getDeltaMovement().scale(0.3);
         looseTime = p.level().getGameTime();
         looseR = r;
@@ -652,12 +841,27 @@ public final class SwingClient {
             ropeLength = Math.min(MAX_ROPE, ropeLength + 0.4);
         }
 
+        // corner whip: if a building gets between you and your web, it wraps around the corner
+        if (p.tickCount % 2 == 0 && whips < 2) cornerWhip(p, dir, dist);
+        to = anchor.subtract(center(p));
+        dist = to.length();
+        if (dist < 1.0E-3) return;
+        dir = to.scale(1.0 / dist);
+
         if (dist > ropeLength) {
             double radial = v.dot(dir);
-            if (radial < 0) v = v.subtract(dir.scale(radial));
+            if (radial < 0) {
+                // the web catches you with a little stretch instead of a dead stop
+                if (!caught && radial < -0.35) {
+                    caught = true;
+                    FirstPersonFx.dip((float) Math.min(1.0, -radial));
+                }
+                v = v.subtract(dir.scale(radial * 0.88));
+            }
             v = v.add(dir.scale(Math.min(0.5, (dist - ropeLength) * 0.15)));
         }
 
+        Vec3 c = center(p);
         if (!p.onGround()) {
             // cancel most of vanilla's air drag so the swing keeps its speed (gravity still applies)
             double keep = Config.SWING_KEEP.get();
@@ -665,7 +869,36 @@ public final class SwingClient {
                          v.y * keep / AIR_DRAG_Y,
                          v.z * keep / AIR_DRAG_XZ);
             v = pump(p, mc, v, dir);
+
+            // stronger upswing: on the way up you lose less speed, so a fast swing carries you much higher
+            if (v.y > 0 && dist > ropeLength - 0.6) v = v.add(0, GRAVITY * 0.35, 0);
+
+            // over the top: if you're going fast enough, the web stays tight so you can loop all the way around
+            Vec3 tangent = v.subtract(dir.scale(v.dot(dir)));
+            if (c.y > anchor.y && dist < ropeLength && tangent.length() > 0.5) {
+                v = v.subtract(dir.scale(Math.min(0.35, (ropeLength - dist) * 0.4)));
+            }
         }
+
+        // loops and spins (for praise)
+        double above = c.y - anchor.y;
+        if (above > ropeLength * 0.7) aboveTop = true;
+        if (aboveTop && above < -ropeLength * 0.3) {
+            aboveTop = false;
+            StyleScore.trick(Trick.LOOP, v.length());
+        }
+        double ang = Math.atan2(c.z - anchor.z, c.x - anchor.x);
+        if (!Double.isNaN(lastSpinAngle)) {
+            double dA = ang - lastSpinAngle;
+            if (dA > Math.PI) dA -= 2 * Math.PI;
+            if (dA < -Math.PI) dA += 2 * Math.PI;
+            spinAngle += dA;
+            if (ropeLength < 8.0 && Math.abs(spinAngle) > 2 * Math.PI) {
+                spinAngle = 0;
+                StyleScore.trick(Trick.POLE_SPIN, v.length());
+            }
+        }
+        lastSpinAngle = ang;
 
         // Swing Speed skills raise your top speed; the max is never above the "Top Speed" setting
         double cap = Config.MAX_SPEED.get();
@@ -676,6 +909,25 @@ public final class SwingClient {
         p.setDeltaMovement(v);
         p.fallDistance = 0;
         trail(p);
+    }
+
+    /** If a block is between you and your anchor, the web wraps around it: a new, closer anchor. */
+    private static void cornerWhip(Player p, Vec3 dirToAnchor, double dist) {
+        Vec3 c = center(p);
+        Vec3 from = anchor.subtract(dirToAnchor.scale(0.6)); // start just off the anchor's own block
+        BlockHitResult hit = p.level().clip(new ClipContext(from, c, ClipContext.Block.COLLIDER, ClipContext.Fluid.NONE, p));
+        if (hit.getType() != HitResult.Type.BLOCK) return;
+        Vec3 newAnchor = hit.getLocation().add(Vec3.atLowerCornerOf(hit.getDirection().getNormal()).scale(0.3));
+        double newLen = newAnchor.distanceTo(c);
+        if (newLen < MIN_ROPE || newLen > dist - 1.0) return;
+        anchor = newAnchor;
+        ropeLength = newLen;
+        whips++;
+        doubleWeb = false;
+        p.setDeltaMovement(p.getDeltaMovement().scale(1.08)); // whip around faster
+        playSfx(p, SFX_STICK, 0.35f, 1.9f);
+        StyleScore.trick(Trick.CORNER_WHIP, p.getDeltaMovement().length());
+        sendWeb(p, AnimState.SWING, anchor);
     }
 
     /** Double web: two webs side by side pull the rope tighter, so you swing faster. */
@@ -694,95 +946,197 @@ public final class SwingClient {
         sendWeb(p, AnimState.DOUBLE, anchor);
     }
 
-    // ======== wall run ========
-    /** Hit a wall at an angle while going fast: start running along it. */
-    private static void tryStartWallRun(Player p) {
-        if (!Config.WALL_RUN.get() || !p.horizontalCollision || p.onGround() || p.isInWater()) return;
-        if (!StyleScore.has(Skill.WALL_RUN)) return;
-        if (!(anchor != null || zipTarget != null || glideTicks > 0 || diving)) return;
-        Vec3 flat = new Vec3(prevVel.x, 0, prevVel.z);
-        if (flat.length() < WALL_RUN_MIN_SPEED) return;
-        Vec3 n = findWall(p, flat.normalize());
-        if (n == null) return;
-        Vec3 along = flat.subtract(n.scale(flat.dot(n)));
-        if (along.length() < 0.5) return; // head-on: that's a wall smack, not a wall run
+    // ======== wall crawl + wall run ========
+    /**
+     * Stick to walls and ceilings: jump at a wall, swing or zip into one, or walk into one and keep pushing.
+     * W/A/S/D crawl (relative to where you look). Hold Sprint to wall run (skill). Space jumps off, Sneak lets go.
+     */
+    private static void tryStartCrawl(Player p, Minecraft mc) {
+        if (!Config.WALL_CRAWL.get() || crawlCooldown > 0 || p.isInWater() || p.isPassenger()
+                || p.getAbilities().flying || p.isFallFlying() || slamming) return;
+        Vec3 n = null;
+        // bumped your head going up: ceiling
+        if (!p.onGround() && p.verticalCollision && prevVel.y > 0.05 && surfaceAt(p, DOWN)) n = DOWN;
+        if (n == null && p.horizontalCollision) {
+            boolean pushing = mc.options.keyUp.isDown();
+            wallPushTicks = pushing ? wallPushTicks + 1 : 0;
+            if (!p.onGround() || wallPushTicks >= 5) {
+                Vec3 hint = new Vec3(prevVel.x, 0, prevVel.z);
+                if (hint.lengthSqr() < 1.0E-4) hint = new Vec3(p.getLookAngle().x, 0, p.getLookAngle().z);
+                n = findWall(p, hint.lengthSqr() < 1.0E-4 ? new Vec3(0, 0, 1) : hint.normalize());
+            }
+        } else if (!p.horizontalCollision) {
+            wallPushTicks = 0;
+        }
+        if (n != null) startCrawl(p, n);
+    }
 
+    private static void startCrawl(Player p, Vec3 n) {
         if (anchor != null) {
             letGo(p, anchor, 250, 250, 255);
             anchor = null;
             doubleWeb = false;
+            sendWeb(p, AnimState.NONE, null);
         }
         if (zipTarget != null) {
             zipTarget = null;
             zipLaunch = false;
             zipEntity = null;
+            sendWeb(p, AnimState.NONE, null);
         }
-        wallNormal = n;
-        wallDir = along.normalize();
-        wallSpeed = Math.max(0.6, along.length());
-        wallRunTicks = WALL_RUN_TICKS;
-        wallRunAge = 0;
-        wallJumpWasDown = true; // don't kick off from a Space you were already holding
+        crawling = true;
+        wallRunning = false;
+        crawlN = n;
+        crawlAge = 0;
+        wallRunTime = 0;
+        crawlJumpWasDown = true; // don't jump off from a Space you were already holding
         glideTicks = 0;
-        sendWeb(p, AnimState.NONE, null);
-        Tricks.wallRun(p, wallNormal);
-        PacketDistributor.sendToServer(new SwingPayload(true)); // no fall damage while on the wall
+        gliding = false;
+        diving = false;
+        lastCrawlMove = Vec3.ZERO;
+        p.setDeltaMovement(Vec3.ZERO);
+        playSfx(p, SFX_STICK, 0.3f, 1.3f);
+        Tricks.surfacePose(p, Trick.WALL_CRAWL, n);
+        Tutorial.done(Tutorial.Step.CRAWL);
+        PacketDistributor.sendToServer(new SwingPayload(true)); // no fall damage while on a wall
+    }
+
+    private static void crawlTick(Player p, Minecraft mc, boolean usable, boolean swingPressed) {
+        crawlAge++;
+        Vec3 n = crawlN;
+        boolean jump = mc.options.keyJump.isDown() && usable;
+        boolean jumpPressed = jump && !crawlJumpWasDown;
+        crawlJumpWasDown = jump;
+
+        if (!usable || swingPressed) {        // shooting a web pulls you off the wall into a swing
+            endCrawl(p);
+            crawlCooldown = 8;
+            return;
+        }
+        if (p.isShiftKeyDown()) {             // let go
+            endCrawl(p);
+            crawlCooldown = 12;
+            p.setDeltaMovement(n.scale(0.15));
+            return;
+        }
+        if (jumpPressed) {                    // jump off
+            Vec3 look = p.getLookAngle();
+            Vec3 out = n.scale(0.7).add(0, n.y < -0.5 ? -0.1 : 0.55, 0).add(look.scale(0.35));
+            endCrawl(p);
+            crawlCooldown = 8;
+            p.setDeltaMovement(out);
+            glideTotal = Config.ticks(Config.GLIDE_SECONDS);
+            glideTicks = glideTotal;
+            StyleScore.trick(Trick.WALL_JUMP, out.length());
+            return;
+        }
+
+        // still on the surface?
+        if (!surfaceAt(p, n)) {
+            if (n.y == 0 && lastCrawlMove.y > 0.02 && feetOnSurface(p, n)) {
+                // reached the top of the wall: climb up onto it
+                p.setDeltaMovement(n.scale(-0.3).add(0, 0.55, 0));
+            }
+            endCrawl(p);
+            crawlCooldown = 6;
+            return;
+        }
+
+        // movement along the surface, relative to where you're looking
+        double f = (mc.options.keyUp.isDown() ? 1 : 0) - (mc.options.keyDown.isDown() ? 1 : 0);
+        double sd = (mc.options.keyLeft.isDown() ? 1 : 0) - (mc.options.keyRight.isDown() ? 1 : 0);
+        Vec3 look = p.getLookAngle();
+        Vec3 fwd = look.subtract(n.scale(look.dot(n)));
+        if (fwd.lengthSqr() < 0.12) fwd = UP.subtract(n.scale(UP.dot(n)));  // looking right at the wall: W climbs up
+        if (fwd.lengthSqr() < 1.0E-4) fwd = new Vec3(look.x, 0, look.z);
+        if (fwd.lengthSqr() < 1.0E-4) fwd = new Vec3(0, 0, 1);
+        fwd = fwd.normalize();
+        Vec3 right = fwd.cross(n).normalize();
+
+        boolean run = mc.options.keySprint.isDown() && Config.WALL_RUN.get() && (f != 0 || sd != 0);
+        if (run && !StyleScore.has(Skill.WALL_RUN)) {
+            if (crawlAge % 40 == 1) StyleScore.locked(Skill.WALL_RUN);
+            run = false;
+        }
+        Vec3 move = fwd.scale(f).add(right.scale(sd));
+        if (move.lengthSqr() > 1.0E-4) move = move.normalize().scale(run ? WALL_RUN_SPEED : CRAWL_SPEED);
+        lastCrawlMove = move;
+
+        // standing on the ground at the bottom of a wall and not climbing: get off
+        if (p.onGround() && n.y == 0 && move.y <= 0 && crawlAge > 5) {
+            endCrawl(p);
+            crawlCooldown = 10;
+            return;
+        }
+
+        // moving onto another surface (wall -> ceiling, ceiling -> wall, inside corners)
+        Vec3 flatMove = new Vec3(move.x, 0, move.z);
+        if (n.y < -0.5 && p.horizontalCollision && flatMove.lengthSqr() > 1.0E-4) {
+            Vec3 w = findWall(p, flatMove.normalize());
+            if (w != null) setSurface(p, w, run);
+        } else if (n.y == 0 && move.y > 0 && p.verticalCollision && surfaceAt(p, DOWN)) {
+            setSurface(p, DOWN, run);
+        } else if (n.y == 0 && p.horizontalCollision && flatMove.lengthSqr() > 1.0E-4) {
+            Vec3 w = findWall(p, flatMove.normalize());
+            if (w != null && w.distanceToSqr(n) > 0.1) setSurface(p, w, run);
+        }
+
+        if (run != wallRunning) {
+            wallRunning = run;
+            Tricks.surfacePose(p, run ? Trick.WALL_RUN : Trick.WALL_CRAWL, crawlN);
+            if (run) startWhoosh(p);
+        }
+        if (run && ++wallRunTime % 60 == 0) StyleScore.trick(Trick.WALL_RUN, WALL_RUN_SPEED * 4);
+
+        Vec3 v = move.subtract(crawlN.scale(0.08)); // hug the surface
+        p.setDeltaMovement(v.x / AIR_DRAG_XZ, v.y / AIR_DRAG_Y + GRAVITY, v.z / AIR_DRAG_XZ);
+        p.fallDistance = 0;
+        if (run) trail(p);
+    }
+
+    private static void setSurface(Player p, Vec3 n, boolean run) {
+        crawlN = n;
+        Tricks.surfacePose(p, run ? Trick.WALL_RUN : Trick.WALL_CRAWL, n);
+    }
+
+    private static void endCrawl(Player p) {
+        crawling = false;
+        wallRunning = false;
+        Tricks.surfacePose(p, Trick.NONE, Vec3.ZERO);
+        PacketDistributor.sendToServer(new SwingPayload(false)); // a few seconds of fall protection after
+    }
+
+    /** Is there a wall (or ceiling) right next to you on the side that n points away from? */
+    private static boolean surfaceAt(Player p, Vec3 n) {
+        Vec3 c = center(p);
+        double reach = n.y < -0.5 ? p.getBbHeight() * 0.5 + 0.45 : p.getBbWidth() * 0.5 + 0.45;
+        BlockHitResult hit = p.level().clip(new ClipContext(c, c.subtract(n.scale(reach)),
+                ClipContext.Block.COLLIDER, ClipContext.Fluid.NONE, p));
+        return hit.getType() == HitResult.Type.BLOCK;
+    }
+
+    /** Wall still there at foot level (used to climb up over the top). */
+    private static boolean feetOnSurface(Player p, Vec3 n) {
+        Vec3 f = p.position().add(0, 0.2, 0);
+        BlockHitResult hit = p.level().clip(new ClipContext(f, f.subtract(n.scale(p.getBbWidth() * 0.5 + 0.45)),
+                ClipContext.Block.COLLIDER, ClipContext.Fluid.NONE, p));
+        return hit.getType() == HitResult.Type.BLOCK;
     }
 
     /** Which way the wall next to you faces (null if there isn't one). */
     private static Vec3 findWall(Player p, Vec3 hint) {
         Vec3 c = center(p);
-        Vec3[] dirs = {hint, hint.cross(new Vec3(0, 1, 0)), hint.cross(new Vec3(0, -1, 0))};
+        Vec3[] dirs = {hint, hint.cross(UP), hint.cross(DOWN), hint.scale(-1),
+                new Vec3(1, 0, 0), new Vec3(-1, 0, 0), new Vec3(0, 0, 1), new Vec3(0, 0, -1)};
         for (Vec3 d : dirs) {
-            BlockHitResult hit = p.level().clip(new ClipContext(c, c.add(d.scale(1.2)),
+            if (d.lengthSqr() < 1.0E-4) continue;
+            BlockHitResult hit = p.level().clip(new ClipContext(c, c.add(d.normalize().scale(0.9)),
                     ClipContext.Block.COLLIDER, ClipContext.Fluid.NONE, p));
             if (hit.getType() == HitResult.Type.BLOCK && hit.getDirection().getAxis().isHorizontal()) {
                 return Vec3.atLowerCornerOf(hit.getDirection().getNormal());
             }
         }
         return null;
-    }
-
-    private static void wallRunTick(Player p, Minecraft mc, boolean usable) {
-        wallRunAge++;
-        boolean jump = mc.options.keyJump.isDown() && usable;
-        boolean kick = jump && !wallJumpWasDown;
-        wallJumpWasDown = jump;
-
-        // still a wall there?
-        Vec3 c = center(p);
-        BlockHitResult hit = p.level().clip(new ClipContext(c, c.subtract(wallNormal.scale(1.0)),
-                ClipContext.Block.COLLIDER, ClipContext.Fluid.NONE, p));
-        boolean wall = hit.getType() == HitResult.Type.BLOCK;
-
-        if (kick) {
-            // kick off the wall
-            p.setDeltaMovement(wallNormal.scale(0.85).add(wallDir.scale(0.5)).add(0, 0.75, 0));
-            StyleScore.trick(Trick.WALL_KICK, p.getDeltaMovement().length());
-            playSfx(p, SFX_KICK, 0.4f, 1.3f);
-            endWallRun(p, true);
-            return;
-        }
-        if (!wall || p.onGround() || --wallRunTicks <= 0 || !usable) {
-            endWallRun(p, wall && !p.onGround());
-            return;
-        }
-        double speed = wallSpeed * Math.pow(0.985, wallRunAge);
-        double up = 0.12 - 0.012 * wallRunAge; // a little arc: up at first, then sliding down
-        p.setDeltaMovement(wallDir.scale(speed).add(0, up, 0).subtract(wallNormal.scale(0.05)));
-        p.fallDistance = 0;
-        trail(p);
-    }
-
-    private static void endWallRun(Player p, boolean glideAfter) {
-        if (wallRunAge >= 10) StyleScore.trick(Trick.WALL_RUN, wallSpeed);
-        wallRunTicks = 0;
-        Tricks.wallRun(p, null);
-        PacketDistributor.sendToServer(new SwingPayload(false));
-        if (glideAfter) {
-            glideTotal = Config.ticks(Config.GLIDE_SECONDS);
-            glideTicks = glideTotal;
-        }
     }
 
     // ======== web glide ========
@@ -1220,6 +1574,7 @@ public final class SwingClient {
             AnimState s = e.getValue();
             if (s.mode != AnimState.NONE && s.target != null) return true;
             if (s.looseFrom != null && now - s.looseTime < LOOSE_WEB_TICKS) return true;
+            if (s.shotTarget != null && now - s.shotTime < 10) return true;
         }
         return false;
     }
@@ -1230,11 +1585,11 @@ public final class SwingClient {
             if (e.getKey() == me.getId()) continue;
             if (!(me.level().getEntity(e.getKey()) instanceof Player other)) continue;
             AnimState s = e.getValue();
-            Vec3 h = hand(other, pt);
+            Vec3 h = handFor(other, pt, s.leftHand);
             if (s.mode == AnimState.DOUBLE && s.target != null) {
                 Vec3 side = other.getViewVector(pt).cross(new Vec3(0, 1, 0));
                 side = side.lengthSqr() < 1.0E-4 ? Vec3.ZERO : side.normalize().scale(DOUBLE_SPREAD);
-                Vec3 h2 = otherHand(other, pt);
+                Vec3 h2 = handFor(other, pt, !s.leftHand);
                 web(pose, vc, h, s.target.add(side), time, 250, 250, 255, false);
                 web(pose, vc, h2, s.target.subtract(side), time, 250, 250, 255, false);
             } else if (s.mode == AnimState.SWING && s.target != null) {
@@ -1245,6 +1600,14 @@ public final class SwingClient {
             }
             if (s.looseFrom != null && s.looseTo != null && now - s.looseTime < LOOSE_WEB_TICKS) {
                 drawLoose(pose, vc, s.looseFrom, s.looseTo, Vec3.ZERO, now - s.looseTime + pt, 250, 250, 255);
+            }
+            if (s.shotTarget != null && now - s.shotTime < 10) {
+                // their web shot
+                float age = now - s.shotTime + pt;
+                Vec3 sh = handFor(other, pt, s.shotLeft);
+                curAlpha = (int) Mth.clamp(255.0f * (10.0f - age) / 3.0f, 0.0f, 255.0f);
+                web(pose, vc, sh, reach(sh, s.shotTarget, s.shotTime, now, pt), time, 255, 255, 255, true);
+                curAlpha = 255;
             }
         }
     }
@@ -1270,7 +1633,8 @@ public final class SwingClient {
         float pt = event.getPartialTick().getGameTimeDeltaPartialTick(true);
         float time = now + pt;
         Vec3 cam = event.getCamera().getPosition();
-        Vec3 start = hand(p, pt);
+        Vec3 start = handFor(p, pt, useLeft);
+        Vec3 shotStartPos = handFor(p, pt, shotLeft);
 
         PoseStack ps = event.getPoseStack();
         ps.pushPose();
@@ -1282,7 +1646,7 @@ public final class SwingClient {
 
         curAlpha = 255;
         if (anchor != null && doubleWeb && anchorA != null) {
-            Vec3 start2 = otherHand(p, pt);
+            Vec3 start2 = handFor(p, pt, !useLeft);
             web(pose, vc, start, anchorA, time, 250, 250, 255, false);
             web(pose, vc, start2, anchorB, time, 250, 250, 255, false);
             splat(pose, vc, anchorA, anchorA.subtract(start).normalize(), 1.1, 250, 250, 255);
@@ -1307,10 +1671,10 @@ public final class SwingClient {
         if (shot) {
             float age = now - shotStart + pt;
             curAlpha = (int) Mth.clamp(255.0f * (10.0f - age) / 3.0f, 0.0f, 255.0f);
-            web(pose, vc, start, reach(start, shotEnd, shotStart, now, pt), time, 255, 255, 255, true);
+            web(pose, vc, shotStartPos, reach(shotStartPos, shotEnd, shotStart, now, pt), time, 255, 255, 255, true);
             if (age >= 3.0f) {
                 double rad = 0.6 * Math.min(1.0f, (age - 3.0f) / 3.0f);
-                splat(pose, vc, shotEnd, shotEnd.subtract(start).normalize(), rad, 255, 255, 255);
+                splat(pose, vc, shotEnd, shotEnd.subtract(shotStartPos).normalize(), rad, 255, 255, 255);
             }
             curAlpha = 255;
         }

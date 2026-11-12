@@ -11,6 +11,7 @@ public final class Tutorial {
         SWING("Hold %s to shoot a web and swing"),
         PUMP("Press %s while swinging to pump and build speed"),
         RELEASE("Let go of %s to fly off the web"),
+        CRAWL("Jump at a wall to stick to it. Space jumps off, Sneak lets go"),
         FLIP("Press %s in the air to do a flip"),
         ZIP("Press %s to zip to where you're looking"),
         SHOOT("Tap %s to shoot a web"),
@@ -45,14 +46,14 @@ public final class Tutorial {
         hintBlockedUntil = now + HINT_COOLDOWN;
     }
 
-    public static void draw(GuiGraphics g, Font font, long now) {
+    public static void draw(GuiGraphics g, Font font, long now, boolean tips) {
         int cx = g.guiWidth() / 2;
         if (hint != null && now - hintTime < HINT_TICKS) {
             float a = Math.min(1f, (HINT_TICKS - (now - hintTime)) / 15f);
             g.drawCenteredString(font, hint, cx, g.guiHeight() / 2 + 36, ((int) (Math.max(0.05f, a) * 255) << 24) | 0xFFB0A0);
         }
 
-        if (!Config.SHOW_TUTORIAL.get()) return;
+        if (!tips || !Config.SHOW_TUTORIAL.get()) return;
         int cur = StyleScore.tutorialStep();
         Step[] steps = Step.values();
         if (cur < 0 || cur >= steps.length) return;
@@ -71,6 +72,7 @@ public final class Tutorial {
         Minecraft mc = Minecraft.getInstance();
         KeyMapping k = switch (s) {
             case SWING, RELEASE -> ClientKeys.SWING;
+            case CRAWL -> null;
             case PUMP -> mc.options.keyUp;
             case FLIP -> mc.options.keyJump;
             case ZIP -> ClientKeys.ZIP;

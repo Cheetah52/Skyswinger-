@@ -34,7 +34,17 @@ public enum Trick {
     WEB_GLIDE("Web Glide", 60, 0, 1),
     WEB_SLAM("Web Slam", 120, 0, 1),
     CHARGED_LEAP("Charged Leap", 50, 1, 1),
-    WEB_BURST("Web Burst", 150, 1, 1);
+    WEB_BURST("Web Burst", 150, 1, 1),
+    // added in Update 6
+    WALL_CRAWL("Wall Crawl", 0, 0, 1),
+    WALL_JUMP("Wall Jump", 60, 1, 1),
+    PERFECT_RELEASE("Perfect Release", 80, 1, 1),
+    CORNER_WHIP("Corner Whip", 120, 1, 1),
+    POLE_SPIN("Pole Spin", 150, 1, 1),
+    LOOP("Loop the Loop", 200, 1, 1),
+    PERFECT_ZIP("Perfect Zip", 60, 1, 1),
+    ZIP_VAULT("Zip Vault", 100, 14, 1),
+    SLINGSHOT_ZIP("Slingshot Zip", 100, 1, 1);
 
     public final String title;
     public final int points, duration, level;

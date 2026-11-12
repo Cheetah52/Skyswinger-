@@ -11,6 +11,8 @@ public class SkySwinger {
 
     public SkySwinger(IEventBus modBus, ModContainer container) {
         ModItems.register(modBus);
+        ModEntities.register(modBus);
+        ModAttachments.register(modBus);
         container.registerConfig(ModConfig.Type.CLIENT, Config.CLIENT_SPEC);
         container.registerConfig(ModConfig.Type.COMMON, Config.COMMON_SPEC);
     }

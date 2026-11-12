@@ -13,7 +13,7 @@ public enum Skill {
     POINT_LAUNCH("Point Launch", Branch.SWINGING, null, 1, 0,
             "Aim at a wall, press B", "Zip to the top edge of a wall and fling up off it."),
     WALL_RUN("Wall Run", Branch.SWINGING, POINT_LAUNCH, 1, 1,
-            "Swing into a wall at an angle", "Run along walls. Press Space to kick off."),
+            "Hold Sprint (Ctrl) while on a wall", "Run along walls, up them and across ceilings, as long as you like."),
     CHARGED_LEAP("Charged Leap", Branch.SWINGING, WALL_RUN, 1, 2,
             "Hold Sneak to charge, press Space", "A huge jump straight into the air."),
     SWING_SPEED_1("Swing Speed I", Branch.SWINGING, null, 2, 0,
@@ -22,34 +22,40 @@ public enum Skill {
             "Always on", "Raises your top swing speed to the max."),
 
     // ---- Acrobatics ----
-    SIDE_FLIPS("Side Flips", Branch.ACROBATICS, null, 3, 0,
+    SIDE_FLIPS("Side Flips", Branch.ACROBATICS, null, 4, 0,
             "G + A or D in the air", "Flip sideways."),
-    SPINS("Spin & Corkscrew", Branch.ACROBATICS, SIDE_FLIPS, 3, 1,
+    SPINS("Spin & Corkscrew", Branch.ACROBATICS, SIDE_FLIPS, 4, 1,
             "Tap G in the air (fast = corkscrew)", "Spin around. Going fast turns it into a corkscrew."),
-    SWAN_DIVE("Swan Dive", Branch.ACROBATICS, SPINS, 3, 2,
+    SWAN_DIVE("Swan Dive", Branch.ACROBATICS, SPINS, 4, 2,
             "Hold G while falling", "A graceful head-first dive with your arms spread."),
-    DOUBLE_FLIPS("Double Flips", Branch.ACROBATICS, SWAN_DIVE, 3, 3,
+    DOUBLE_FLIPS("Double Flips", Branch.ACROBATICS, SWAN_DIVE, 4, 3,
             "Do the same flip twice in a row", "Chain flips into doubles."),
-    STYLE_MASTER("Style Master", Branch.ACROBATICS, null, 4, 0,
+    STYLE_MASTER("Style Master", Branch.ACROBATICS, null, 5, 0,
             "Always on", "Praise builds faster and tricks give 50% more Web XP."),
 
     // ---- Combat ----
-    WEB_PULL("Web Pull", Branch.COMBAT, null, 5, 0,
+    WEB_PULL("Web Pull", Branch.COMBAT, null, 6, 0,
             "Aim at a mob, press H", "Yank small mobs to you, or pull yourself to big ones."),
-    SWING_KICK("Swing Kick", Branch.COMBAT, WEB_PULL, 5, 1,
+    SWING_KICK("Swing Kick", Branch.COMBAT, WEB_PULL, 6, 1,
             "Fly into a mob fast", "Hit mobs harder the faster you're going."),
-    WEB_SLAM("Web Slam", Branch.COMBAT, SWING_KICK, 5, 2,
+    WEB_SLAM("Web Slam", Branch.COMBAT, SWING_KICK, 6, 2,
             "In the air, look down, G + S", "Slam into the ground and knock back mobs around you."),
-    WEB_TRAP("Web Trap", Branch.COMBAT, null, 6, 0,
+    WEB_TRAP("Web Trap", Branch.COMBAT, null, 7, 0,
             "Hold V, then let go", "Wrap a mob in webs and slow it down."),
-    WEB_COCOON("Web Cocoon", Branch.COMBAT, WEB_TRAP, 6, 1,
+    WEB_COCOON("Web Cocoon", Branch.COMBAT, WEB_TRAP, 7, 1,
             "Web trap a trapped mob", "Wrap it up and hang it upside down."),
-    WEB_BURST("Web Burst", Branch.COMBAT, WEB_COCOON, 6, 2,
+    WEB_BURST("Web Burst", Branch.COMBAT, WEB_COCOON, 7, 2,
             "Hold V and press G", "Webs fly out in every direction and trap mobs around you."),
-    BIG_TANK("Bigger Web Tank", Branch.COMBAT, null, 7, 0,
+    BIG_TANK("Bigger Web Tank", Branch.COMBAT, null, 8, 0,
             "Always on", "Cartridges refill twice as much. Traps and bursts use half the fluid."),
-    QUICK_RELOAD("Quick Reload", Branch.COMBAT, BIG_TANK, 7, 1,
-            "Always on", "Shorter cooldowns on everything.");
+    QUICK_RELOAD("Quick Reload", Branch.COMBAT, BIG_TANK, 8, 1,
+            "Always on", "Shorter cooldowns on everything."),
+
+    // ---- added in Update 6 (keep new ones at the end) ----
+    ZIP_VAULT("Zip Vault", Branch.SWINGING, null, 3, 0,
+            "Press Space as a zip arrives", "Vault up and over what you zipped to, with a flip."),
+    SLINGSHOT_ZIP("Slingshot Zip", Branch.SWINGING, ZIP_VAULT, 3, 1,
+            "Hold Z, then let go", "Pull back and launch much farther and faster than a normal zip.");
 
     public enum Branch {
         SWINGING("Swinging", 0x8FD3FF), ACROBATICS("Acrobatics", 0xFFD36A), COMBAT("Combat", 0xFF8A70);

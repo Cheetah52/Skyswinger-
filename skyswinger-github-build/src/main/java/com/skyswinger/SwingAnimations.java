@@ -14,6 +14,7 @@ import net.neoforged.bus.api.SubscribeEvent;
 import net.neoforged.fml.common.EventBusSubscriber;
 import net.neoforged.neoforge.client.event.RenderPlayerEvent;
 import org.joml.Quaternionf;
+import org.joml.Vector3f;
 
 /**
  * Animations for you and your friends (see yourself with F5).
@@ -23,7 +24,7 @@ import org.joml.Quaternionf;
  */
 @EventBusSubscriber(modid = SkySwinger.MODID, value = Dist.CLIENT)
 public final class SwingAnimations {
-    public enum Kind { NONE, SWING, ZIP, TRICK, ROLL, SWAN, DIVE, KICK, WALLRUN, PERCH, HERO, WEBGLIDE, SLAM, FALL, GLIDE }
+    public enum Kind { NONE, SWING, ZIP, TRICK, ROLL, SWAN, DIVE, KICK, WALLRUN, CRAWL, CEILING, PERCH, HERO, WEBGLIDE, SLAM, FALL, GLIDE }
 
     private static final double MAX_LEAN = Math.toRadians(75);
     private static final double MAX_DIVE_LEAN = Math.toRadians(165); // head-first dives can tip almost upside down
@@ -38,6 +39,7 @@ public final class SwingAnimations {
         if (s == null || !Config.ANIMATIONS.get()) return Kind.NONE;
         if (s.trick == Trick.SWING_KICK && s.inTrick(p.tickCount)) return Kind.KICK;
         if (s.trick == Trick.WALL_RUN) return Kind.WALLRUN;
+        if (s.trick == Trick.WALL_CRAWL) return s.trickData.y < -0.5 ? Kind.CEILING : Kind.CRAWL;
         if (s.trick == Trick.WEB_GLIDE) return Kind.WEBGLIDE;
         if (s.trick == Trick.WEB_SLAM) return Kind.SLAM;
         if (s.trick == Trick.HERO_LANDING && s.inTrick(p.tickCount)) return Kind.HERO;
@@ -99,10 +101,7 @@ public final class SwingAnimations {
                 if (v.lengthSqr() > 1.0E-4) target = v.normalize();
             }
             case KICK -> target = s.lean;
-            case WALLRUN -> {
-                // feet on the wall, body tipped away from it
-                if (s.trickData.lengthSqr() > 1.0E-4) target = s.trickData.scale(0.75).add(0, 0.65, 0).normalize();
-            }
+            case WALLRUN, CRAWL, CEILING -> target = UP; // these use orientBody below
             case PERCH -> target = UP.lerp(fwd, 0.3).normalize();
             case WEBGLIDE -> target = fwd.scale(0.95).add(0, 0.3, 0).normalize(); // belly down, spread out
             case SLAM -> target = UP;
@@ -119,6 +118,13 @@ public final class SwingAnimations {
         PoseStack ps = event.getPoseStack();
         ps.pushPose();
         pushed = true;
+
+        // on walls and ceilings: turn the whole body to match the surface
+        if (kind == Kind.WALLRUN || kind == Kind.CRAWL || kind == Kind.CEILING) {
+            surfaceBody(ps, p, s, kind, pt, bodyYaw);
+            return;
+        }
+
         float pivot = kind == Kind.ROLL ? 0.45f : p.getBbHeight() * 0.5f;
         if (kind == Kind.PERCH) ps.translate(0, -0.45f, 0);  // crouched low
         if (kind == Kind.HERO) {
@@ -139,6 +145,68 @@ public final class SwingAnimations {
         }
     }
 
+    /**
+     * Wall crawl: chest to the wall, head up, leaning in.
+     * Ceiling crawl: chest to the ceiling, head forward.
+     * Wall run: feet on the surface, facing the way you run.
+     */
+    private static void surfaceBody(PoseStack ps, Player p, AnimState s, Kind kind, float pt, float bodyYaw) {
+        Vec3 n = s.trickData.lengthSqr() > 1.0E-4 ? s.trickData.normalize() : UP;
+        Vec3 vel = new Vec3(p.getX() - p.xo, p.getY() - p.yo, p.getZ() - p.zo);
+        Vec3 onWall = vel.subtract(n.scale(vel.dot(n)));
+        Vec3 bodyFwd = forward(bodyYaw);
+        Vec3 front, up;
+        float pivot = p.getBbHeight() * 0.5f;
+        Vec3 offset = Vec3.ZERO;
+        switch (kind) {
+            case CEILING -> {
+                front = UP;                                   // chest to the ceiling
+                Vec3 head = onWall.lengthSqr() > 4.0E-4 ? onWall.normalize() : new Vec3(bodyFwd.x, 0, bodyFwd.z).normalize();
+                up = head;
+                offset = new Vec3(0, 0.62, 0);                // hug the ceiling
+            }
+            case WALLRUN -> {
+                up = n;                                       // feet on the wall
+                Vec3 dir = onWall.lengthSqr() > 4.0E-4 ? onWall.normalize() : UP.subtract(n.scale(UP.dot(n))).normalize();
+                front = dir;
+                if (n.y > -0.5) offset = n.scale(0.6);        // so your feet touch the wall
+            }
+            default -> {                                      // CRAWL on a wall
+                Vec3 wallUp = UP.subtract(n.scale(UP.dot(n)));
+                wallUp = wallUp.lengthSqr() < 1.0E-4 ? new Vec3(0, 0, 1) : wallUp.normalize();
+                up = wallUp.scale(0.94).subtract(n.scale(0.34)).normalize(); // lean into the wall
+                front = n.scale(-1);
+            }
+        }
+        // make front exactly perpendicular to up
+        front = front.subtract(up.scale(front.dot(up)));
+        if (front.lengthSqr() < 1.0E-4) front = bodyFwd.subtract(up.scale(bodyFwd.dot(up)));
+        if (front.lengthSqr() < 1.0E-4) return;
+        front = front.normalize();
+
+        // rotation that takes the normal body (facing bodyFwd, up = UP) to (front, up)
+        Vector3f upNow = new Vector3f(0, 1, 0);
+        Vector3f upWant = new Vector3f((float) up.x, (float) up.y, (float) up.z);
+        Quaternionf q1 = new Quaternionf().rotationTo(upNow, upWant);
+        Vector3f f0 = q1.transform(new Vector3f((float) bodyFwd.x, (float) bodyFwd.y, (float) bodyFwd.z));
+        Vector3f fw = new Vector3f((float) front.x, (float) front.y, (float) front.z);
+        // flatten both onto the plane around "up", then turn around "up"
+        f0.sub(new Vector3f(upWant).mul(f0.dot(upWant)));
+        fw.sub(new Vector3f(upWant).mul(fw.dot(upWant)));
+        float twist = 0f;
+        if (f0.lengthSquared() > 1.0E-6f && fw.lengthSquared() > 1.0E-6f) {
+            f0.normalize();
+            fw.normalize();
+            Vector3f cross = new Vector3f(f0).cross(fw);
+            twist = (float) Math.atan2(cross.dot(upWant), f0.dot(fw));
+        }
+        Quaternionf q = new Quaternionf().rotationAxis(twist, upWant).mul(q1);
+
+        ps.translate(offset.x, offset.y + pivot, offset.z);
+        ps.mulPose(q);
+        ps.translate(0, -pivot, 0);
+    }
+
     private static void applyLean(PoseStack ps, Vec3 lean, double maxLean) {
         double angle = Math.min(Math.acos(Mth.clamp(lean.y, -1.0, 1.0)), maxLean);
         if (angle < 0.01) return;
@@ -154,7 +222,7 @@ public final class SwingAnimations {
         float fx = (float) -Math.sin(yaw), fz = (float) Math.cos(yaw);   // forward
         float rx = (float) -Math.cos(yaw), rz = (float) -Math.sin(yaw);  // right
         switch (t) {
-            case FRONT_FLIP, RELEASE_FLIP, DOUBLE_FRONT_FLIP, LANDING_ROLL -> rot(ps, -TAU * e, rx, 0, rz);
+            case FRONT_FLIP, RELEASE_FLIP, DOUBLE_FRONT_FLIP, LANDING_ROLL, ZIP_VAULT -> rot(ps, -TAU * e, rx, 0, rz);
             case BACKFLIP, DOUBLE_BACKFLIP -> rot(ps, TAU * e, rx, 0, rz);
             case SIDE_FLIP_LEFT -> rot(ps, -TAU * e, fx, 0, fz);
             case SIDE_FLIP_RIGHT -> rot(ps, TAU * e, fx, 0, fz);
@@ -176,7 +244,10 @@ public final class SwingAnimations {
         if (!(entity instanceof Player p)) return;
         AnimState s = AnimState.find(p);
         Kind kind = kind(p, s);
-        if (kind == Kind.NONE) return;
+        if (kind == Kind.NONE) {
+            if (shootingArm(m, p, s)) copyLayers(m);
+            return;
+        }
 
         float wob = Mth.sin(age * 0.55f) * 0.06f; // little flutter so it doesn't look frozen
         Vec3 vel = new Vec3(p.getX() - p.xo, p.getY() - p.yo, p.getZ() - p.zo);
@@ -207,9 +278,25 @@ public final class SwingAnimations {
                 set(m.leftLeg, 0.04f - wob * 0.5f, 0f, -0.02f);
             }
             case WALLRUN -> {
-                // legs keep their running motion; arms out for balance
-                set(m.rightArm, -0.4f + wob, 0f, 0.9f);
-                set(m.leftArm, -0.4f - wob, 0f, -0.9f);
+                // sprinting: legs and arms pump
+                double sp = vel.length();
+                float ph = age * (0.6f + (float) Math.min(0.6, sp));
+                float swingAmt = (float) Math.min(1.2, 0.5 + sp * 1.5);
+                set(m.rightLeg, Mth.sin(ph) * swingAmt, 0f, 0.05f);
+                set(m.leftLeg, -Mth.sin(ph) * swingAmt, 0f, -0.05f);
+                set(m.rightArm, -Mth.sin(ph) * swingAmt * 0.8f - 0.2f, 0f, 0.15f);
+                set(m.leftArm, Mth.sin(ph) * swingAmt * 0.8f - 0.2f, 0f, -0.15f);
+            }
+            case CRAWL, CEILING -> {
+                // spider crawl: limbs spread wide, reaching one after the other as you move
+                boolean moving = vel.lengthSqr() > 1.0E-4;
+                float ph = age * (moving ? 0.55f : 0.05f);
+                float r = moving ? 0.45f : 0.08f;
+                set(m.rightArm, -2.5f + Mth.sin(ph) * r, 0f, 0.65f);
+                set(m.leftArm, -2.5f + Mth.sin(ph + PI) * r, 0f, -0.65f);
+                set(m.rightLeg, -0.95f + Mth.sin(ph + PI) * r, 0f, 0.55f);
+                set(m.leftLeg, -0.95f + Mth.sin(ph) * r, 0f, -0.55f);
+                m.head.xRot = kind == Kind.CEILING ? 0.9f : -0.5f; // look ahead along the surface
             }
             case WEBGLIDE -> {
                 // arms and legs spread wide to stretch the web
@@ -264,6 +351,11 @@ public final class SwingAnimations {
             default -> { }
         }
 
+        if (kind != Kind.SWING && kind != Kind.ZIP && kind != Kind.CRAWL && kind != Kind.CEILING) shootingArm(m, p, s);
+        copyLayers(m);
+    }
+
+    private static void copyLayers(PlayerModel<?> m) {
         m.hat.copyFrom(m.head);
         // keep the outer skin layer in place
         m.rightSleeve.copyFrom(m.rightArm);
@@ -271,6 +363,21 @@ public final class SwingAnimations {
         m.rightPants.copyFrom(m.rightLeg);
         m.leftPants.copyFrom(m.leftLeg);
         m.jacket.copyFrom(m.body);
+    }
+
+    /** Right after a web shot: that arm snaps out toward where you're looking, then eases back. */
+    private static boolean shootingArm(PlayerModel<?> m, Player p, AnimState s) {
+        if (s == null || s.shotTarget == null) return false;
+        float age = p.level().getGameTime() - s.shotTime;
+        if (age < 0 || age > 8) return false;
+        float k = age < 2 ? 1f : 1f - (age - 2) / 6f;     // snap out, hold, ease back
+        ModelPart arm = s.shotLeft ? m.leftArm : m.rightArm;
+        float aimX = m.head.xRot - PI / 2f;                 // straight out, following your view
+        float aimY = m.head.yRot + (s.shotLeft ? 0.1f : -0.1f);
+        arm.xRot = Mth.lerp(k, arm.xRot, aimX);
+        arm.yRot = Mth.lerp(k, arm.yRot, aimY);
+        arm.zRot = Mth.lerp(k, arm.zRot, 0f);
+        return true;
     }
 
     private static void poseSwing(PlayerModel<?> m, Player p, AnimState s, Vec3 vel) {
@@ -285,14 +392,17 @@ public final class SwingAnimations {
         float tuck = (float) (Mth.clamp((speed - 0.6) / 0.6, 0.0, 1.0) * Mth.clamp((ropeY - 0.85) / 0.1, 0.0, 1.0));
         float legX = Mth.lerp(tuck, trail, -1.1f); // knees up through the bottom of the arc
 
-        // web arm reaches straight up along the web (the body is lined up with it)
-        set(m.rightArm, -PI + 0.05f, 0f, 0.08f);
         if (s.mode == AnimState.DOUBLE) {
             // double web: both arms up, one on each web
             set(m.rightArm, -PI + 0.25f, 0f, 0.3f);
             set(m.leftArm, -PI + 0.25f, 0f, -0.3f);
+        } else if (s.leftHand) {
+            // web in the left hand, right arm out for balance
+            set(m.leftArm, -PI + 0.05f, 0f, -0.08f);
+            set(m.rightArm, -0.3f - trail * 0.3f, 0f, 1.1f - tuck * 0.5f);
         } else {
-            // free arm out for balance
+            // web in the right hand, left arm out for balance
+            set(m.rightArm, -PI + 0.05f, 0f, 0.08f);
             set(m.leftArm, -0.3f - trail * 0.3f, 0f, -1.1f + tuck * 0.5f);
         }
         set(m.rightLeg, legX + 0.08f, 0f, 0.05f);

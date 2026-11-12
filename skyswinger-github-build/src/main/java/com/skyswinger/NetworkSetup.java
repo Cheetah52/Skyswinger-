@@ -9,7 +9,7 @@ import net.neoforged.neoforge.network.registration.PayloadRegistrar;
 public final class NetworkSetup {
     @SubscribeEvent
     public static void register(RegisterPayloadHandlersEvent event) {
-        PayloadRegistrar registrar = event.registrar("5").optional();
+        PayloadRegistrar registrar = event.registrar("6").optional();
         registrar.playToServer(SwingPayload.TYPE, SwingPayload.CODEC, SwingPayload::handle);
         registrar.playToServer(WebShotPayload.TYPE, WebShotPayload.CODEC, WebShotPayload::handle);
         registrar.playToServer(ActionPayload.TYPE, ActionPayload.CODEC, ActionPayload::handle);
@@ -21,5 +21,8 @@ public final class NetworkSetup {
         registrar.playToClient(XpPayload.TYPE, XpPayload.CODEC, XpPayload::handle);
         registrar.playToServer(BurstPayload.TYPE, BurstPayload.CODEC, BurstPayload::handle);
         registrar.playToServer(SlamPayload.TYPE, SlamPayload.CODEC, SlamPayload::handle);
+        registrar.playToClient(BiteOfferPayload.TYPE, BiteOfferPayload.CODEC, BiteOfferPayload::handle);
+        registrar.playToServer(BiteAnswerPayload.TYPE, BiteAnswerPayload.CODEC, BiteAnswerPayload::handle);
+        registrar.playToClient(BittenPayload.TYPE, BittenPayload.CODEC, BittenPayload::handle);
     }
 }

@@ -11,7 +11,7 @@ public final class AgilityServer {
     @SubscribeEvent
     public static void onFall(LivingFallEvent event) {
         if (!(event.getEntity() instanceof Player p)) return;
-        if (!Gear.hasShooter(p)) return;
+        if (!BiteServer.powered(p)) return; // agility comes from the bite
         float keep = (float) (1.0 - Config.FALL_REDUCTION.get());
         event.setDamageMultiplier(event.getDamageMultiplier() * keep);
     }
